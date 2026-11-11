@@ -1,15 +1,15 @@
-## 관련 이슈
+## Related Issue
 
-<!-- 머지할 때 이슈도 닫으려면 Closes #이슈번호를 적어주세요. -->
+<!-- Use Closes #123 to close the issue when this pull request is merged. -->
 
-## 변경 내용
+## Changes
 
-<!-- 주요 변경 사항을 적어주세요. -->
+<!-- Summarize the main changes. -->
 
-## 확인한 내용
+## Verification
 
-<!-- 확인 방법과 결과를 적어주세요. -->
+<!-- Describe how you verified the changes and what you observed. -->
 
-## 기타
+## Notes
 
-<!-- 리뷰어가 확인할 사항이나 참고 링크를 적어주세요. -->
+<!-- Add anything reviewers should check or any useful links. -->
