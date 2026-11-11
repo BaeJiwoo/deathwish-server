@@ -1,20 +1,20 @@
 ---
-name: 작업 이슈
-about: 작업 목표와 할 일을 기록합니다.
+name: Task
+about: Define a task and track its progress.
 ---
 
-## 목표
+## Goal
 
-<!-- 이 작업으로 달성할 결과를 적어주세요. -->
+<!-- Describe the outcome this task should achieve. -->
 
-## 작업 목록
+## Tasks
 
-- [ ] 할 일
+- [ ] Add a task
 
-## 기타
+## Notes
 
-<!-- 참고 자료나 논의할 내용을 적어주세요. -->
+<!-- Add reference links or points for discussion. -->
 
-## 관련 PR
+## Related Pull Request
 
-<!-- PR을 만들면 번호나 링크를 남겨주세요. -->
+<!-- Add the pull request number or link once it is open. -->
