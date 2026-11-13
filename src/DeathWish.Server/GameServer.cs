@@ -9,23 +9,25 @@ namespace DeathWish.Server;
 public sealed class GameServer
 {
     private readonly IPEndPoint _endpoint;
+    private readonly int _roomCount;
 
-    public GameServer(IPEndPoint endpoint)
+    public GameServer(ServerOptions options)
     {
-        ArgumentNullException.ThrowIfNull(endpoint);
-        _endpoint = new IPEndPoint(endpoint.Address, endpoint.Port);
+        ArgumentNullException.ThrowIfNull(options);
+        _endpoint = new IPEndPoint(IPAddress.Parse(options.Address), options.Port);
+        _roomCount = options.RoomCount;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        var sessions = new SessionManager();
+        var rooms = new RoomManager(sessions, _roomCount);
         var acceptGroup = new MultithreadEventLoopGroup(1);
         MultithreadEventLoopGroup? workerGroup = null;
         IChannel? listener = null;
         var connections = new DefaultChannelGroup(acceptGroup.GetNext());
-        var sessions = new SessionManager();
-        var rooms = new RoomManager(sessions);
 
         try
         {
@@ -41,7 +43,7 @@ public sealed class GameServer
                 }));
 
             listener = await bootstrap.BindAsync(_endpoint);
-            Console.WriteLine($"Listening on {listener.LocalAddress}. Press Ctrl+C to stop.");
+            Console.WriteLine($"Listening on {listener.LocalAddress}. Rooms: {_roomCount}. Press Ctrl+C to stop.");
 
             await Task.Delay(Timeout.Infinite, cancellationToken);
         }

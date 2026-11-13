@@ -10,15 +10,18 @@ public sealed class RoomManager
     private readonly Dictionary<int, Room> _rooms;
     private readonly Dictionary<Guid, Room> _membership = new();
 
-    public RoomManager(SessionManager sessions)
+    public RoomManager(SessionManager sessions, int roomCount = ServerOptions.DefaultRoomCount)
     {
         ArgumentNullException.ThrowIfNull(sessions);
+        if (roomCount < 1) throw new ArgumentOutOfRangeException(nameof(roomCount));
+
         _sessions = sessions;
-        _rooms = new Dictionary<int, Room>
+        _rooms = new Dictionary<int, Room>(roomCount);
+        for (int index = 0; index < roomCount; index++)
         {
-            [1] = new Room(1, _sync),
-            [2] = new Room(2, _sync)
-        };
+            int roomId = index + 1;
+            _rooms.Add(roomId, new Room(roomId, _sync));
+        }
     }
 
     public bool TryGetRoom(int roomId, [NotNullWhen(true)] out Room? room)

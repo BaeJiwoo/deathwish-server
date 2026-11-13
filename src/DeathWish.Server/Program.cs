@@ -1,12 +1,13 @@
-using System.Net;
 using DeathWish.Server;
 
-if (args.Length > 2 ||
-    !IPAddress.TryParse(args.ElementAtOrDefault(0) ?? "127.0.0.1", out var address) ||
-    !int.TryParse(args.ElementAtOrDefault(1) ?? "7777", out var port) ||
-    port is < 1 or > 65535)
+ServerOptions options;
+try
 {
-    Console.Error.WriteLine("Usage: DeathWish.Server [IP address] [port 1-65535]");
+    options = ServerOptionsLoader.Load(args);
+}
+catch (Exception exception) when (exception is ArgumentException or FormatException or IOException or UnauthorizedAccessException)
+{
+    Console.Error.WriteLine($"Server configuration error: {exception.Message}");
     return 1;
 }
 
@@ -20,7 +21,7 @@ Console.CancelKeyPress += cancelHandler;
 
 try
 {
-    var server = new GameServer(new IPEndPoint(address, port));
+    var server = new GameServer(options);
     await server.RunAsync(cancellation.Token);
     return 0;
 }

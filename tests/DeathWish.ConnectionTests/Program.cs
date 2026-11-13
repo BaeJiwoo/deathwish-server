@@ -36,6 +36,7 @@ static void VerifyEcho(byte[] request, string expected, int split)
     finally { response.Release(); channel.FinishAndReleaseAll(); }
 }
 
+ServerOptionsTests.Run();
 var sessions = new SessionManager();
 var rooms = new RoomManager(sessions);
 var firstHandler = new GameChannelHandler(sessions, rooms);

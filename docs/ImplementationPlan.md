@@ -27,6 +27,18 @@ Stages 1 through 5 deliver connection, world admission, an admission response, a
 
 ### Session and room commit checkpoints
 
+Current configuration update: ServerOptions.cs centralizes default address, port, and room count.
+ServerOptionsLoader reads the working-directory .env and process environment at startup;
+precedence is CLI address/port, environment, file, then defaults. Invalid effective settings or
+malformed file syntax fail before networking starts. The file reader does not mutate the process
+environment. .env.example is versioned; local .env files are ignored. Configuration changes need
+a restart, not a rebuild. See Protocol.md for supported file syntax and launch instructions.
+Program passes immutable options to GameServer, which creates rooms 1 through RoomCount before
+allocating networking resources. DefaultRoomCount remains 2 to preserve existing startup behavior.
+RoomManager validates the count and preallocates rooms in a loop. Existing CLI address/port
+overrides remain supported. Match lifecycle, reset, and dynamic room allocation are out of scope.
+Earlier checkpoint references to rooms 1 and 2 describe the default configuration.
+
 The current scope introduces room membership before fixed-tick gameplay. Implement and review one checkpoint at a time; commit after acceptance.
 
 1. `feat: add client session lifecycle` - Create a ClientSession on channel activation with a server-generated Guid and its channel. Mark it disconnected exactly once on ChannelInactive. Status: implemented, awaiting user review. No registry or room state in this checkpoint.
