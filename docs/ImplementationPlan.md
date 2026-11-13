@@ -88,6 +88,21 @@ Stages 1 through 5 deliver connection, world admission, an admission response, a
 - Measure tick duration, overruns, allocations, queue depth, and pending sends.
 - Review: Record results and any unverified platform or load targets.
 
+## Connection-test checkpoint before Stage 2
+
+- [ ] Implementation and review complete.
+- Add `mockclient/DeathWish.MockClient.Core` and `mockclient/DeathWish.MockClient.Console`.
+- Add per-connection server logging and length-prefixed typed Echo handling in `GameChannelHandler`.
+- Keep connection-test transport reusable from Unity through .NET Standard 2.1.
+- Specify framing, limits, and execution commands in [Protocol.md](Protocol.md).
+- Status: Implemented; awaiting user review and runtime verification.
+- Build verification: Server, Core, and Console builds passed with zero warnings and errors.
+- Verification limitation: Local TCP connection attempts were denied by the execution environment. Echo round trips, concurrent clients, timeout behavior, and disconnect logs require runtime verification.
+- Stage 2 will extend the handler with ClientSession and session identity.
+- Review fix: Continuously receive in Core and expose `Disconnected` so server closure interrupts console input waiting. Pending Echo requests fail on closure; runtime shutdown verification remains pending in an environment permitting TCP.
+- Communication review: Reject duplicate Connect and Echo-before-connect calls, preserve cancellation causes, validate Echo content in Core, and report timeouts explicitly.
+- Regression checks passed: fragmented headers/payloads, combined/empty frames, 4096-byte boundary, oversized/invalid UTF-8/type/direction rejection, Echo-before-connect, and Connect-after-disposal. Socket lifecycle checks remain blocked by TCP access denial.
+
 ## Deferred design considerations
 
 - [ ] Review resource ownership in `GameServer.RunAsync` before introducing separate lifecycle methods or broadcasting.
@@ -95,3 +110,9 @@ Stages 1 through 5 deliver connection, world admission, an admission response, a
   - Reconsider making `acceptGroup` a field if `StopAsync` or `DisposeAsync` needs to manage event-loop shutdown.
   - Reconsider making `connections` a field if other methods need to broadcast or close connections.
   - Before moving either resource to a field, define initialization and cleanup ownership, access before startup and after shutdown, and concurrent or repeated `RunAsync` behavior.
+
+## Binary Echo review update
+
+- Shared DeathWish.Protocol now defines a 3-byte header (big-endian payload length and message type), PacketReader, and Echo codec. This brings basic framing forward from Stage 5; JoinAck remains in Stage 5.
+- Server and MockClient use the shared protocol. Maximum payload is 4096 bytes. Old newline clients must be updated.
+- Awaiting user review. TCP and Unity runtime verification remain pending.

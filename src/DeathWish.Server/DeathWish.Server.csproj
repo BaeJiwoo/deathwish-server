@@ -8,4 +8,5 @@
   <ItemGroup>
     <PackageReference Include="DotNetty.Transport" Version="0.7.6" />
   </ItemGroup>
+  <ItemGroup><ProjectReference Include="../DeathWish.Protocol/DeathWish.Protocol.csproj" /></ItemGroup>
 </Project>

@@ -35,7 +35,7 @@ public sealed class GameServer
                 .ChildHandler(new ActionChannelInitializer<IChannel>(channel =>
                 {
                     connections.Add(channel);
-                    channel.Pipeline.AddLast(new ChannelHandlerAdapter());
+                    channel.Pipeline.AddLast(new GameChannelHandler());
                 }));
 
             listener = await bootstrap.BindAsync(_endpoint);
