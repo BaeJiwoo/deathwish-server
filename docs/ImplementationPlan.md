@@ -2,16 +2,21 @@
 
 This plan covers the C# game server. Unity development takes place in a separate repository. Use TCP test clients to verify the server's protocol and lifecycle behavior.
 
-Follow the review workflow in [AGENTS.md](../AGENTS.md). All stages below are pending. Each checkbox represents implementation, verification, and user review acceptance.
+Follow the review workflow in [AGENTS.md](../AGENTS.md). Each checkbox represents implementation, verification, and user review acceptance.
 
 Stages 1 through 5 deliver connection, world admission, an admission response, and departure cleanup. Later stages add movement, snapshots, and quantization. The initial rates of 30 Hz and 10 Hz are configurable starting values.
 
 ## Stage 1 — Server startup and shutdown
 
-- [ ] Implementation and review complete.
+- [x] Implementation and review complete.
 - Add the console project, DotNetty dependencies, and GameServer.
 - Bind the configured TCP endpoint and release resources on cancellation.
 - Review: Startup failures are visible; shutdown releases the listening port.
+- Status — Implemented; user accepted the Program.cs and GameServer.cs code review. Remaining verification is tracked below.
+- Implementation — .NET 10 console application, DotNetty.Transport 0.7.6, configurable IP address and port, cancellation-driven cleanup of the listener, accepted connections, and event loops.
+- Verified on Windows — Build passed with zero warnings and errors. TCP connection, occupied-port failure, cancellation with a connected client, port reuse, and invalid CLI arguments passed.
+- Verification environment — NuGet service-index access failed. Packages were downloaded to a temporary local feed for build verification.
+- Remaining verification — Interactive Ctrl+C shutdown and Linux execution. The terminal automation ended the host on Ctrl+C, so graceful shutdown was verified through the cancellation token instead.
 
 ## Stage 2 — Connection lifecycle
 
@@ -82,3 +87,11 @@ Stages 1 through 5 deliver connection, world admission, an admission response, a
 - Agree on target player count and input rate before judging performance.
 - Measure tick duration, overruns, allocations, queue depth, and pending sends.
 - Review: Record results and any unverified platform or load targets.
+
+## Deferred design considerations
+
+- [ ] Review resource ownership in `GameServer.RunAsync` before introducing separate lifecycle methods or broadcasting.
+  - Keep `acceptGroup` and `connections` local while `RunAsync` owns their creation, use, and cleanup.
+  - Reconsider making `acceptGroup` a field if `StopAsync` or `DisposeAsync` needs to manage event-loop shutdown.
+  - Reconsider making `connections` a field if other methods need to broadcast or close connections.
+  - Before moving either resource to a field, define initialization and cleanup ownership, access before startup and after shutdown, and concurrent or repeated `RunAsync` behavior.

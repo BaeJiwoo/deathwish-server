@@ -19,7 +19,17 @@
 | 프로젝트 목표 | Server-Authoritative 슈팅 게임 시스템 구축 |
 | 프로젝트 링크 | [BaeJiwoo/DeathWish](https://github.com/BaeJiwoo/DeathWish) |
 
-## 개발 목표
+## 서버 실행
+
+.NET 10 SDK가 필요합니다. 기본 주소는 `127.0.0.1:7777`이며, IP 주소와 포트를 인자로 지정할 수 있습니다.
+
+```powershell
+dotnet run --project src/DeathWish.Server -- 127.0.0.1 7777
+```
+
+`Ctrl+C`로 서버를 종료합니다. 잘못된 인자나 포트 바인딩 실패는 표준 오류에 출력되며 종료 코드는 1입니다.
+
+## 개발 진행
 
 현재 구현은 TCP 접속, 고정 틱 기반 월드 입장·퇴장, 이동 입력, 스냅숏 동기화 순서로 진행합니다. 초기 틱 주기는 30Hz, 스냅숏 전송 주기는 10Hz로 두고 부하 측정 결과에 따라 조정합니다.
 
