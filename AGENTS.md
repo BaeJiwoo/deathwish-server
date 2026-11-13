@@ -13,6 +13,15 @@ Apply these C# conventions to the server and its protocol code.
 - Report changed files, verification results, and remaining limitations at each review checkpoint.
 - Keep the plan updated as implementation decisions and scope change.
 
+## Daily Development Log
+
+- Maintain dated development logs in `docs/devlog/YYYY-MM-DD.md` using Asia/Seoul dates.
+- After implementation, fixes, or verification, update the current day's log before the review handoff or final response. Continue the same file for additional work on that date.
+- Follow `docs/devlog/README.md` and add new dates to its index.
+- Record actual changes, design decisions, verification results, limitations, and the next starting point. Distinguish implemented work from proposals and deferred work.
+- Include commit hashes only after checking Git history; do not infer review acceptance, commits, or pushes from implementation alone. Do not commit solely to update the log.
+- Never copy secrets or private `.env` values into logs.
+
 ## Comments
 
 - Write all code comments in English, including XML documentation comments and TODOs.
