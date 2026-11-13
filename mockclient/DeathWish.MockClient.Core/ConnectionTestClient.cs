@@ -7,14 +7,15 @@ using System.Threading.Tasks;
 
 namespace DeathWish.MockClient.Core;
 
-/// <summary>A single-use connection. Await each Echo before starting another.</summary>
+/// <summary>A single-use connection. Await each request before starting another.</summary>
 public sealed class ConnectionTestClient : IDisposable
 {
     private readonly TcpClient _client = new TcpClient();
     private readonly PacketReader _reader = new PacketReader();
     private readonly object _sync = new object();
     private readonly TaskCompletionSource<bool> _disconnected = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    private TaskCompletionSource<string>? _pendingEcho;
+    private TaskCompletionSource<byte[]>? _pendingResponse;
+    private MessageType _expectedResponse;
     private bool _closed;
     private bool _connectStarted;
     private bool _connected;
@@ -61,18 +62,42 @@ public sealed class ConnectionTestClient : IDisposable
     }
 
     /// <summary>Sends at most 4096 UTF-8 bytes including embedded LF. Cancellation closes the connection.</summary>
-    public async Task<string> EchoAsync(string message, CancellationToken cancellationToken)
+    public Task<string> EchoAsync(string message, CancellationToken cancellationToken)
     {
         byte[] payload = PacketCodec.EncodeEcho(MessageType.EchoRequest, message);
+        return RequestAsync(payload, MessageType.EchoResponse, response =>
+        {
+            string echoed = PacketCodec.DecodeEcho(response);
+            if (echoed != message) throw new InvalidDataException("Echo mismatch.");
+            return echoed;
+        }, cancellationToken);
+    }
+
+    /// <summary>Requests a positive room ID. Admission failures are returned normally. Cancellation closes the connection.</summary>
+    public Task<JoinRoomResponse> JoinRoomAsync(int roomId, CancellationToken cancellationToken)
+    {
+        byte[] payload = PacketCodec.EncodeJoinRoomRequest(new JoinRoomRequest(roomId));
+        return RequestAsync(payload, MessageType.JoinRoomResponse, response =>
+        {
+            JoinRoomResponse result = PacketCodec.DecodeJoinRoomResponse(response);
+            if (result.RoomId != roomId) throw new InvalidDataException("Room response does not match the requested room.");
+            return result;
+        }, cancellationToken);
+    }
+
+    private async Task<T> RequestAsync<T>(byte[] payload, MessageType expectedResponse,
+        Func<byte[], T> decode, CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var response = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var response = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_sync)
         {
             if (_closed) throw new IOException("Connection is closed.", _disconnectError);
-            if (!_connected) throw new InvalidOperationException("Connect before sending an Echo.");
-            if (_pendingEcho != null) throw new InvalidOperationException("An Echo is already pending.");
-            _pendingEcho = response;
+            if (!_connected) throw new InvalidOperationException("Connect before sending a request.");
+            if (_pendingResponse != null) throw new InvalidOperationException("A request is already pending.");
+            _expectedResponse = expectedResponse;
+            _pendingResponse = response;
         }
 
         using (cancellationToken.Register(() => Close(new OperationCanceledException(cancellationToken))))
@@ -81,10 +106,9 @@ public sealed class ConnectionTestClient : IDisposable
             {
                 NetworkStream stream = _client.GetStream();
                 await stream.WriteAsync(payload, 0, payload.Length, cancellationToken).ConfigureAwait(false);
-                string echoedMessage = await response.Task.ConfigureAwait(false);
+                byte[] received = await response.Task.ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
-                if (echoedMessage != message) throw new InvalidDataException("Echo mismatch.");
-                return echoedMessage;
+                return decode(received);
             }
             catch (Exception exception)
             {
@@ -96,7 +120,7 @@ public sealed class ConnectionTestClient : IDisposable
             }
             finally
             {
-                lock (_sync) { _pendingEcho = null; }
+                lock (_sync) { _pendingResponse = null; }
             }
         }
     }
@@ -114,24 +138,22 @@ public sealed class ConnectionTestClient : IDisposable
                 int count = await stream.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
                 if (count == 0)
                 {
-                    if (_reader.HasPartialFrame) throw new EndOfStreamException("Server closed an incomplete Echo frame.");
+                    if (_reader.HasPartialFrame) throw new EndOfStreamException("Server closed an incomplete frame.");
                     Close(null);
                     return;
                 }
 
                 _reader.Feed(buffer.AsSpan(0, count), (type, payload) =>
                 {
-                    if (type != MessageType.EchoResponse)
-                        throw new InvalidDataException("Client expects EchoResponse.");
-                    string response = PacketCodec.DecodeEcho(payload);
                     lock (_sync)
                     {
-                        if (_pendingEcho == null || !_pendingEcho.TrySetResult(response))
-                            throw new InvalidDataException("Unexpected Echo response.");
+                        if (_pendingResponse == null || type != _expectedResponse || !_pendingResponse.TrySetResult(payload))
+                            throw new InvalidDataException("Unexpected response.");
                     }
                 });
             }
-        }        catch (Exception exception)
+        }
+        catch (Exception exception)
         {
             Close(exception);
         }
@@ -144,7 +166,7 @@ public sealed class ConnectionTestClient : IDisposable
             if (_closed) return;
             _closed = true;
             _disconnectError = error;
-            _pendingEcho?.TrySetException(error ?? new EndOfStreamException("Connection closed."));
+            _pendingResponse?.TrySetException(error ?? new EndOfStreamException("Connection closed."));
             _client.Dispose();
             _disconnected.TrySetResult(true);
         }

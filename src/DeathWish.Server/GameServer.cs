@@ -24,6 +24,8 @@ public sealed class GameServer
         MultithreadEventLoopGroup? workerGroup = null;
         IChannel? listener = null;
         var connections = new DefaultChannelGroup(acceptGroup.GetNext());
+        var sessions = new SessionManager();
+        var rooms = new RoomManager(sessions);
 
         try
         {
@@ -35,7 +37,7 @@ public sealed class GameServer
                 .ChildHandler(new ActionChannelInitializer<IChannel>(channel =>
                 {
                     connections.Add(channel);
-                    channel.Pipeline.AddLast(new GameChannelHandler());
+                    channel.Pipeline.AddLast(new GameChannelHandler(sessions, rooms));
                 }));
 
             listener = await bootstrap.BindAsync(_endpoint);

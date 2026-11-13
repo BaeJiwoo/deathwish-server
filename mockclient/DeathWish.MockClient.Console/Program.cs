@@ -1,4 +1,5 @@
 using DeathWish.MockClient.Core;
+using DeathWish.Protocol;
 
 if (args.Length > 3 || !int.TryParse(args.ElementAtOrDefault(1) ?? "7777", out int port) || port is < 1 or > 65535)
 {
@@ -22,7 +23,7 @@ try
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         await client.ConnectAsync(args.ElementAtOrDefault(0) ?? "127.0.0.1", port, timeout.Token);
     }
-    Console.WriteLine("Connected. Enter a message, or /quit to disconnect.");
+    Console.WriteLine("Connected. Enter a message, /join <roomId>, or /quit to disconnect.");
 
     do
     {
@@ -48,11 +49,27 @@ try
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
-        string response = await client.EchoAsync(message, timeout.Token);
-        Console.WriteLine($"Sent: {message}");
-        Console.WriteLine($"Received: {response}");
-        if (response != message) throw new InvalidDataException("Echo mismatch.");
-        Console.WriteLine("Echo PASS");
+        string[] parts = message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.FirstOrDefault() == "/join")
+        {
+            if (parts.Length != 2 || !int.TryParse(parts[1], out int roomId) || roomId <= 0)
+            {
+                Console.Error.WriteLine("Usage: /join <positive roomId>");
+                if (args.Length == 3) return 1;
+                continue;
+            }
+
+            JoinRoomResponse response = await client.JoinRoomAsync(roomId, timeout.Token);
+            Console.WriteLine($"Join room {response.RoomId}: {response.Result}");
+            if (args.Length == 3 && response.Result != RoomJoinResult.Success) return 1;
+        }
+        else
+        {
+            string response = await client.EchoAsync(message, timeout.Token);
+            Console.WriteLine($"Sent: {message}");
+            Console.WriteLine($"Received: {response}");
+            Console.WriteLine("Echo PASS");
+        }
     } while (args.Length != 3);
     return 0;
 }
