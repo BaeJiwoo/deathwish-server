@@ -4,31 +4,34 @@ static class ServerOptionsTests
 {
     public static void Run()
     {
-        string[] keys = { "SERVER_ADDRESS", "SERVER_PORT", "SERVER_ROOM_COUNT" };
+        string[] keys = { "SERVER_ADDRESS", "SERVER_PORT", "SERVER_ROOM_COUNT", "SERVER_TICK_RATE" };
         var previous = keys.ToDictionary(key => key, Environment.GetEnvironmentVariable);
         string path = Path.Combine(Path.GetTempPath(), $"deathwish-options-{Guid.NewGuid():N}.env");
         try
         {
             foreach (string key in keys) Environment.SetEnvironmentVariable(key, null);
             ServerOptions defaults = ServerOptionsLoader.Load(Array.Empty<string>(), path);
-            Require(defaults.RoomCount == ServerOptions.DefaultRoomCount && defaults.Port == ServerOptions.DefaultPort, "Missing file defaults");
-            File.WriteAllText(path, "# Test settings\nSERVER_ADDRESS='127.0.0.2'\nSERVER_PORT = 8000 # port\nSERVER_ROOM_COUNT=4\nSERVER_ROOM_COUNT=5\n");
+            Require(defaults.RoomCount == ServerOptions.DefaultRoomCount && defaults.Port == ServerOptions.DefaultPort && defaults.TickRate == 30, "Missing file defaults");
+            File.WriteAllText(path, "# Test settings\nSERVER_ADDRESS='127.0.0.2'\nSERVER_PORT = 8000 # port\nSERVER_ROOM_COUNT=4\nSERVER_ROOM_COUNT=5\nSERVER_TICK_RATE=60\n");
             ServerOptions file = ServerOptionsLoader.Load(Array.Empty<string>(), path);
-            Require(file.Address == "127.0.0.2" && file.Port == 8000 && file.RoomCount == 5, "File parsing and last duplicate wins");
+            Require(file.Address == "127.0.0.2" && file.Port == 8000 && file.RoomCount == 5 && file.TickRate == 60, "File parsing and last duplicate wins");
             Require(Environment.GetEnvironmentVariable("SERVER_PORT") is null, "File does not mutate process environment");
             Environment.SetEnvironmentVariable("SERVER_PORT", "9000");
             Environment.SetEnvironmentVariable("SERVER_ROOM_COUNT", "6");
+            Environment.SetEnvironmentVariable("SERVER_TICK_RATE", "120");
             ServerOptions environment = ServerOptionsLoader.Load(Array.Empty<string>(), path);
-            Require(environment.Port == 9000 && environment.RoomCount == 6, "Environment overrides file");
+            Require(environment.Port == 9000 && environment.RoomCount == 6 && environment.TickRate == 120, "Environment overrides file");
             ServerOptions cli = ServerOptionsLoader.Load(new[] { "::1", "10000" }, path);
-            Require(cli.Address == "::1" && cli.Port == 10000 && cli.RoomCount == 6, "CLI overrides environment");
+            Require(cli.Address == "::1" && cli.Port == 10000 && cli.RoomCount == 6 && cli.TickRate == 120, "CLI overrides environment");
             Environment.SetEnvironmentVariable("SERVER_PORT", "invalid");
             Require(ServerOptionsLoader.Load(new[] { "127.0.0.1", "7777" }, path).Port == 7777, "CLI shadows invalid lower priority value");
             Reject<ArgumentException>(() => ServerOptionsLoader.Load(Array.Empty<string>(), path));
             foreach (string key in keys) Environment.SetEnvironmentVariable(key, null);
 
             foreach (string invalid in new[] { "SERVER_PORT=0", "SERVER_PORT=65536", "SERVER_PORT=abc", "SERVER_ADDRESS=nope",
-                "SERVER_ROOM_COUNT=0", "SERVER_ROOM_COUNT=-1", "SERVER_ROOM_COUNT=2147483648", "SERVER_ROOM_COUNT=" })
+                "SERVER_ROOM_COUNT=0", "SERVER_ROOM_COUNT=-1", "SERVER_ROOM_COUNT=2147483648", "SERVER_ROOM_COUNT=",
+                "SERVER_TICK_RATE=0", "SERVER_TICK_RATE=-1", "SERVER_TICK_RATE=2147483648",
+                "SERVER_TICK_RATE=", "SERVER_TICK_RATE=abc", "SERVER_TICK_RATE=30.5" })
             {
                 File.WriteAllText(path, invalid);
                 Reject<ArgumentException>(() => ServerOptionsLoader.Load(Array.Empty<string>(), path));
@@ -41,6 +44,14 @@ static class ServerOptionsTests
             File.WriteAllText(path, "SERVER_PORT=\"7777\" # comment\nSERVER_ROOM_COUNT=3\n");
             Require(ServerOptionsLoader.Load(Array.Empty<string>(), path).RoomCount == 3, "Quoted values and comments");
             Reject<ArgumentException>(() => ServerOptionsLoader.Load(new[] { "127.0.0.1", "7777", "3" }, path));
+            File.WriteAllText(path, "SERVER_TICK_RATE=60\n");
+            Environment.SetEnvironmentVariable("SERVER_TICK_RATE", "invalid");
+            Reject<ArgumentException>(() => ServerOptionsLoader.Load(Array.Empty<string>(), path));
+            Environment.SetEnvironmentVariable("SERVER_TICK_RATE", "2147483647");
+            Require(ServerOptionsLoader.Load(Array.Empty<string>(), path).TickRate == int.MaxValue, "Positive int32 tick rate accepted");
+            Reject<ArgumentOutOfRangeException>(() => new ServerOptions(tickRate: 0));
+            Reject<ArgumentOutOfRangeException>(() => new ServerOptions(tickRate: -1));
+            Require(new ServerOptions("127.0.0.1", 7777, 3).TickRate == 30, "Existing option constructor keeps default tick rate");
             Console.WriteLine("PASS .env parsing, configuration precedence, defaults, and validation");
         }
         finally

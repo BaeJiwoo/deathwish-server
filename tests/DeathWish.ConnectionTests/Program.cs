@@ -37,6 +37,8 @@ static void VerifyEcho(byte[] request, string expected, int split)
 }
 
 ServerOptionsTests.Run();
+await WorldLoopTests.RunAsync();
+await GameServerTests.RunAsync();
 var sessions = new SessionManager();
 var rooms = new RoomManager(sessions);
 var firstHandler = new GameChannelHandler(sessions, rooms);

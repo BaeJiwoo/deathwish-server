@@ -27,6 +27,8 @@
 dotnet run --project src/DeathWish.Server -- 127.0.0.1 7777
 ```
 
+`.env` 또는 프로세스 환경변수에 `SERVER_TICK_RATE=60`을 설정하면 서버 재시작 후 모든 방의 목표 틱 레이트가 60Hz로 바뀝니다. 기본값은 30Hz이며, 자세한 설정은 [실행 문서](docs/Protocol.md#run)를 참조합니다.
+
 `Ctrl+C`로 서버를 종료합니다. 잘못된 인자나 포트 바인딩 실패는 표준 오류에 출력되며 종료 코드는 1입니다.
 
 ## 개발 진행

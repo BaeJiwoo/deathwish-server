@@ -85,7 +85,7 @@ One request may be outstanding. The console applies five-second connect/request 
 Run from the repository root. ServerOptionsLoader reads `.env` from the current working
 directory and creates immutable ServerOptions before any networking resources are allocated.
 Configuration precedence is CLI address/port > process environment > `.env` > code defaults.
-Room count is not a CLI argument. Missing `.env` files are allowed; malformed files, unreadable
+Room count and tick rate are not CLI arguments. Missing `.env` files are allowed; malformed files, unreadable
 files, and invalid effective settings stop startup with a configuration error and exit code 1.
 Only effective values are validated after precedence resolution; file syntax is always checked.
 
@@ -99,11 +99,18 @@ Copy-Item .env.example .env
 SERVER_ADDRESS=127.0.0.1
 SERVER_PORT=7777
 SERVER_ROOM_COUNT=2
+SERVER_TICK_RATE=30
 ```
 
 Change SERVER_ROOM_COUNT to 10 and restart to create rooms 1 through 10 without rebuilding.
-Address must be an IP literal, port must be 1 through 65535, and room count must be a positive
-int32. Code defaults remain 127.0.0.1, 7777, and 2. Options are read only at startup.
+Change SERVER_TICK_RATE to 60 and restart to target 60 world updates per second in every room.
+Address must be an IP literal, port must be 1 through 65535, and room count and tick rate must be
+positive int32 values. Code defaults are 127.0.0.1, 7777, 2 rooms, and 30 Hz. Options are read only
+at startup. Actual timing depends on scheduler resolution and workload; a positive tick rate is
+not a performance guarantee. The loop runs at most four catch-up ticks before discarding excess
+backlog. Start and shutdown logs report the configured rate and loop statistics respectively.
+World ticks currently advance counters only; admission still manages room membership without
+creating a simulated player. No wire formats or client messages change in this stage.
 The minimal `.env` reader supports KEY=VALUE, blank lines, full-line # comments, whitespace,
 single/double-quoted literal values, and trailing # comments (unquoted comments require preceding
 whitespace). Duplicate keys use the last value. Keys are case-sensitive in the file; unrelated

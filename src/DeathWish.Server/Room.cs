@@ -6,11 +6,13 @@ public sealed class Room
     private readonly HashSet<Guid> _members = new();
 
     public int RoomId { get; }
+    public GameWorld World { get; }
     public int MemberCount { get { lock (_sync) return _members.Count; } }
 
     internal Room(int roomId, object sync)
     {
         RoomId = roomId;
+        World = new GameWorld(roomId);
         _sync = sync;
     }
 

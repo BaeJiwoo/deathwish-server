@@ -18,13 +18,16 @@ public static class ServerOptionsLoader
         string address = args.ElementAtOrDefault(0) ?? Resolve("SERVER_ADDRESS", ServerOptions.DefaultAddress);
         string portText = args.ElementAtOrDefault(1) ?? Resolve("SERVER_PORT", ServerOptions.DefaultPort.ToString(CultureInfo.InvariantCulture));
         string roomText = Resolve("SERVER_ROOM_COUNT", ServerOptions.DefaultRoomCount.ToString(CultureInfo.InvariantCulture));
+        string tickText = Resolve("SERVER_TICK_RATE", ServerOptions.DefaultTickRate.ToString(CultureInfo.InvariantCulture));
         if (!IPAddress.TryParse(address, out _)) throw new ArgumentException("SERVER_ADDRESS must be an IP address.");
         if (!int.TryParse(portText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int port) || port is < 1 or > 65535)
             throw new ArgumentException("SERVER_PORT must be an integer from 1 to 65535.");
         if (!int.TryParse(roomText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int roomCount) || roomCount < 1)
             throw new ArgumentException("SERVER_ROOM_COUNT must be a positive integer.");
+        if (!int.TryParse(tickText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int tickRate) || tickRate < 1)
+            throw new ArgumentException("SERVER_TICK_RATE must be a positive integer.");
 
-        return new ServerOptions(address, port, roomCount);
+        return new ServerOptions(address, port, roomCount, tickRate);
     }
 
     private static Dictionary<string, string> ReadFile(string path)

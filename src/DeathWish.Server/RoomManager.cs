@@ -27,6 +27,9 @@ public sealed class RoomManager
     public bool TryGetRoom(int roomId, [NotNullWhen(true)] out Room? room)
         => _rooms.TryGetValue(roomId, out room);
 
+    internal GameWorld[] GetWorlds()
+        => _rooms.Values.OrderBy(room => room.RoomId).Select(room => room.World).ToArray();
+
     public int? GetRoomId(Guid sessionId)
     {
         lock (_sync) return _membership.TryGetValue(sessionId, out var room) ? room.RoomId : null;

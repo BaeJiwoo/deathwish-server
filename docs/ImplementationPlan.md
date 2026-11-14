@@ -75,10 +75,18 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 ## Stage 3 — Fixed tick execution
 
 - [ ] Implementation and review complete.
+- Design specification — [World tick class specification](WorldTickDesign.md) defines per-room GameWorld, shared WorldLoop, statistics, configurable SERVER_TICK_RATE, lifecycle, and review criteria.
+- Status — Implemented and verified on Linux; awaiting user code review. The completion checkbox remains unchecked until acceptance.
 - Add WorldLoop and GameWorld.Tick with an initial rate of 30 Hz.
 - Use monotonic elapsed time and a fixed simulation delta.
 - Bound catch-up work and record tick overruns.
 - Review: Ticks never overlap; cancellation stops the loop cleanly.
+- Implementation — Each room owns a GameWorld. A single-use WorldLoop updates worlds in room ID order outside DotNetty event loops, with fixed simulation delta and rational monotonic deadlines. Each catch-up batch runs at most four ticks; excess deadlines are skipped without advancing simulation counters. Timer waits round up to at least 1 ms, including after backlog is dropped. Immutable statistics report completed ticks, processing overruns, duration, and dropped time.
+- Configuration — ServerOptions.TickRate defaults to 30. SERVER_TICK_RATE resolves process environment, .env, then default; a positive int32 is required and changes take effect after restart. Existing CLI address/port syntax remains unchanged.
+- Lifecycle — GameServer starts the loop only after binding, observes cancellation and loop failure, closes the listener, awaits the loop, then closes connections and event loops. All cleanup operations are attempted; original failures are preserved or aggregated. An internal TimeProvider constructor supports deterministic integration checks.
+- Verified on Linux — .NET 10.0.404 builds of ConnectionTests and MockClient.Console passed with zero warnings/errors; the full ConnectionTests executable exited 0. New checks cover first-tick timing, 30 Hz scheduling over 300 ticks, fixed delta, copied/ordered worlds, concurrent-start rejection, bounded catch-up, sustained overload, statistics, high-rate yielding, cancellation, partial-tick failure, and loop fault propagation. Existing protocol, session, room, and TCP client checks passed.
+- Integration verification — Actual GameServer runs with two connected clients passed admission, Echo, cancellation, simultaneous loop fault/cancellation, disconnect, occupied-port failure, and port reuse. A separate production executable smoke test loaded an isolated .env with 3 rooms and 60 Hz, returned exact Echo bytes, advanced 14 ticks, and exited 0 on SIGINT with client EOF and port reuse. Existing TCP room tests directly assert empty session/member registries after shutdown; the GameServer tests observe public socket lifecycle rather than accessing its local registries.
+- Remaining limitations — World ticks currently advance counters only. Player state, commands, and gameplay remain Stage 4 and later. One slow room delays every room; no performance target, Windows run, or Unity integration has been verified for this change. The default host SDK is .NET 8, so verification used an isolated /tmp/deathwish-dotnet10 SDK without changing project targets.
 
 ## Stage 4 — World admission and removal
 

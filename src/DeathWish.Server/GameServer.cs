@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.ExceptionServices;
 using DotNetty.Transport.Bootstrapping;
 using DotNetty.Transport.Channels;
 using DotNetty.Transport.Channels.Groups;
@@ -10,12 +11,19 @@ public sealed class GameServer
 {
     private readonly IPEndPoint _endpoint;
     private readonly int _roomCount;
+    private readonly int _tickRate;
+    private readonly TimeProvider _timeProvider;
 
-    public GameServer(ServerOptions options)
+    public GameServer(ServerOptions options) : this(options, TimeProvider.System) { }
+
+    internal GameServer(ServerOptions options, TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         _endpoint = new IPEndPoint(IPAddress.Parse(options.Address), options.Port);
         _roomCount = options.RoomCount;
+        _tickRate = options.TickRate;
+        _timeProvider = timeProvider;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -24,6 +32,10 @@ public sealed class GameServer
 
         var sessions = new SessionManager();
         var rooms = new RoomManager(sessions, _roomCount);
+        var worldLoop = new WorldLoop(rooms.GetWorlds(), _tickRate, _timeProvider);
+        using var loopCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task? worldTask = null;
+        var failures = new List<Exception>();
         var acceptGroup = new MultithreadEventLoopGroup(1);
         MultithreadEventLoopGroup? workerGroup = null;
         IChannel? listener = null;
@@ -43,43 +55,49 @@ public sealed class GameServer
                 }));
 
             listener = await bootstrap.BindAsync(_endpoint);
-            Console.WriteLine($"Listening on {listener.LocalAddress}. Rooms: {_roomCount}. Press Ctrl+C to stop.");
+            Console.WriteLine($"Listening on {listener.LocalAddress}. Rooms: {_roomCount}. Tick rate: {_tickRate} Hz. Press Ctrl+C to stop.");
 
-            await Task.Delay(Timeout.Infinite, cancellationToken);
+            // The loop owns simulation work independently of DotNetty's event loops.
+            worldTask = Task.Run(() => worldLoop.RunAsync(loopCancellation.Token));
+            await Task.WhenAny(worldTask, Task.Delay(Timeout.Infinite, loopCancellation.Token));
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception exception)
         {
+            failures.Add(exception);
         }
         finally
         {
+            // Observe the loop once, and attempt every cleanup even when an earlier operation fails.
+            await CleanupAsync(() => loopCancellation.CancelAsync());
+            if (listener is not null) await CleanupAsync(() => listener.CloseAsync());
+            if (worldTask is not null) await CleanupAsync(() => worldTask);
+            await CleanupAsync(() => connections.CloseAsync());
+            await Task.WhenAll(
+                CleanupAsync(() => acceptGroup.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.FromSeconds(5))),
+                CleanupAsync(() => workerGroup?.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.FromSeconds(5)) ?? Task.CompletedTask));
+        }
+
+        if (worldTask is not null)
+        {
+            WorldLoopStatistics statistics = worldLoop.GetStatistics();
             try
             {
-                if (listener is not null)
-                {
-                    await listener.CloseAsync();
-                }
+                Console.WriteLine($"World loop stopped. Ticks: {statistics.CompletedTickCount}, overruns: {statistics.OverrunCount}, " +
+                    $"last: {statistics.LastTickDuration.TotalMilliseconds:F3} ms, max: {statistics.MaxTickDuration.TotalMilliseconds:F3} ms, " +
+                    $"dropped: {statistics.DroppedTime.TotalMilliseconds:F3} ms.");
             }
-            finally
+            catch (Exception exception) { failures.Add(exception); }
+        }
+
+        if (failures.Count == 1) ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures.Count > 1) throw new AggregateException("Server execution or cleanup failed.", failures);
+
+        async Task CleanupAsync(Func<Task> cleanup)
+        {
+            try { await cleanup(); }
+            catch (Exception exception)
             {
-                try
-                {
-                    await connections.CloseAsync();
-                }
-                finally
-                {
-                    var shutdownTasks = new List<Task>
-                    {
-                        acceptGroup.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.FromSeconds(5))
-                    };
-
-                    if (workerGroup is not null)
-                    {
-                        shutdownTasks.Add(workerGroup.ShutdownGracefullyAsync(
-                            TimeSpan.Zero, TimeSpan.FromSeconds(5)));
-                    }
-
-                    await Task.WhenAll(shutdownTasks);
-                }
+                lock (failures) failures.Add(exception);
             }
         }
     }
