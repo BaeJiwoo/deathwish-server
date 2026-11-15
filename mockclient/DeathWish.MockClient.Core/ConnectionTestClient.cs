@@ -23,6 +23,20 @@ public sealed class ConnectionTestClient : IDisposable
     private readonly TaskCompletionSource<JoinAck> _admission = new TaskCompletionSource<JoinAck>(TaskCreationOptions.RunContinuationsAsynchronously);
     private int? _acceptedRoom;
     private int? _requestedRoom;
+    private bool _isSendingMovement;
+    private WorldSnapshot? _latestSnapshot;
+
+    /// <summary>Returns the latest immutable full snapshot, or null before the first snapshot. Safe to read from the UI thread.</summary>
+    public WorldSnapshot? LatestSnapshot
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _latestSnapshot;
+            }
+        }
+    }
 
     /// <summary>Waits for actual player creation. Cancellation permanently closes the connection.</summary>
     public async Task<JoinAck> WaitForAdmissionAsync(CancellationToken cancellationToken)
@@ -71,6 +85,7 @@ public sealed class ConnectionTestClient : IDisposable
                 lock (_sync)
                 {
                     if (_closed) throw new IOException("Connection closed while connecting.", _disconnectError);
+                    _client.NoDelay = true;
                     _connected = true;
                 }
                 _ = ReceiveAsync();
@@ -108,6 +123,51 @@ public sealed class ConnectionTestClient : IDisposable
         }, cancellationToken);
     }
 
+    /// <summary>Sends input after JoinAck without waiting for a response. Await all other sends/requests first; cancellation closes the connection.</summary>
+    public async Task SendMoveAsync(MoveInput input, CancellationToken cancellationToken)
+    {
+        byte[] frame = PacketCodec.EncodeMoveInput(input);
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_sync)
+        {
+            if (_closed)
+            {
+                throw new IOException("Connection is closed.", _disconnectError);
+            }
+            if (!_connected || _admission.Task.Status != TaskStatus.RanToCompletion)
+            {
+                throw new InvalidOperationException("Wait for world admission before sending movement.");
+            }
+            if (_pendingResponse != null || _isSendingMovement)
+            {
+                throw new InvalidOperationException("A send or request is already pending.");
+            }
+            _isSendingMovement = true;
+        }
+
+        using (cancellationToken.Register(() => Close(new OperationCanceledException(cancellationToken))))
+        {
+            try
+            {
+                await _client.GetStream().WriteAsync(frame, 0, frame.Length, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            catch (Exception exception)
+            {
+                Close(exception);
+                cancellationToken.ThrowIfCancellationRequested();
+                throw;
+            }
+            finally
+            {
+                lock (_sync)
+                {
+                    _isSendingMovement = false;
+                }
+            }
+        }
+    }
+
     private async Task<T> RequestAsync<T>(byte[] payload, MessageType expectedResponse,
         Func<byte[], T> decode, CancellationToken cancellationToken)
     {
@@ -118,10 +178,13 @@ public sealed class ConnectionTestClient : IDisposable
         {
             if (_closed) throw new IOException("Connection is closed.", _disconnectError);
             if (!_connected) throw new InvalidOperationException("Connect before sending a request.");
-            if (_pendingResponse != null) throw new InvalidOperationException("A request is already pending.");
+            if (_pendingResponse != null || _isSendingMovement)
+            {
+                throw new InvalidOperationException("A send or request is already pending.");
+            }
             _expectedResponse = expectedResponse;
             _requestedRoom = expectedResponse == MessageType.JoinRoomResponse
-                ? PacketCodec.DecodeJoinRoomRequest(payload.AsSpan(PacketCodec.HeaderSize).ToArray()).RoomId : (int?)null;
+                ? PacketCodec.DecodeJoinRoomRequest(payload.AsSpan(PacketCodec.HEADER_SIZE).ToArray()).RoomId : (int?)null;
             _pendingResponse = response;
         }
 
@@ -172,6 +235,28 @@ public sealed class ConnectionTestClient : IDisposable
                 {
                     lock (_sync)
                     {
+                        if (type == MessageType.WorldSnapshot)
+                        {
+                            WorldSnapshot snapshot = SnapshotCodec.Decode(payload);
+                            bool hasAdmission = _admission.Task.Status == TaskStatus.RanToCompletion;
+                            if (!hasAdmission || snapshot.RoomId != _acceptedRoom ||
+                                snapshot.ServerTick < _admission.Task.Result.ServerTick ||
+                                (_latestSnapshot != null && snapshot.ServerTick <= _latestSnapshot.ServerTick))
+                            {
+                                throw new InvalidDataException("Unexpected world snapshot.");
+                            }
+                            bool hasLocalPlayer = false;
+                            foreach (SnapshotPlayer player in snapshot.Players)
+                            {
+                                hasLocalPlayer |= player.PlayerId == _admission.Task.Result.PlayerId;
+                            }
+                            if (!hasLocalPlayer)
+                            {
+                                throw new InvalidDataException("Snapshot is missing the admitted player.");
+                            }
+                            _latestSnapshot = snapshot;
+                            return;
+                        }
                         if (type == MessageType.JoinAck)
                         {
                             JoinAck ack = PacketCodec.DecodeJoinAck(payload);

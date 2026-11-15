@@ -1,0 +1,483 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Threading;
+using System.Threading.Tasks;
+using DeathWish.MockClient.Core;
+using DeathWish.Protocol;
+using UnityEngine;
+using UnityEngine.UI;
+
+namespace DeathWish.Client
+{
+    public sealed class SyncTestClient : MonoBehaviour
+    {
+        private const float INPUT_INTERVAL_SECONDS = 1f / 30f;
+        private const float LOOK_SENSITIVITY = 2f;
+        private const float DEGREES_PER_TURN = 360f;
+        private const float GIZMO_RADIUS_METERS = 0.35f;
+        private const float DEFAULT_PITCH_DEGREES = 22f;
+        private const float MIN_PITCH_DEGREES = 10f;
+        private const float MAX_PITCH_DEGREES = 65f;
+        private const float CAMERA_DISTANCE_METERS = 5f;
+        private const float CAMERA_HEIGHT_METERS = 1.5f;
+        private const float CAMERA_SIDE_OFFSET_METERS = 1.4f;
+        private const float FLOOR_SIZE_METERS = 100f;
+        private const int TIMEOUT_SECONDS = 5;
+        private const int MAX_PORT = 65535;
+
+        [SerializeField] private InputField _hostInput = null;
+        [SerializeField] private InputField _portInput = null;
+        [SerializeField] private InputField _roomInput = null;
+        [SerializeField] private Button _connectButton = null;
+        [SerializeField] private Button _captureButton = null;
+        [SerializeField] private Button _disconnectButton = null;
+        [SerializeField] private Text _statusText = null;
+        [SerializeField] private Text _sessionText = null;
+        [SerializeField] private Text _positionText = null;
+        [SerializeField] private Text _inputText = null;
+
+        private readonly Dictionary<long, Vector3> _positions = new Dictionary<long, Vector3>();
+        private readonly Dictionary<long, Transform> _markers = new Dictionary<long, Transform>();
+        private readonly List<long> _departedPlayers = new List<long>();
+        private Transform _viewCamera;
+        private Mesh _playerMesh;
+        private Material _floorMaterial;
+        private Material _localMaterial;
+        private Material _remoteMaterial;
+        private ConnectionTestClient _client;
+        private CancellationTokenSource _cancellation;
+        private string _status = "Disconnected";
+        private long _playerId;
+        private long _lastTick;
+        private uint _sequence;
+        private float _yawDegrees;
+        private float _pitchDegrees = DEFAULT_PITCH_DEGREES;
+        private float _nextInputSeconds;
+        private bool _isConnecting;
+        private bool _isSending;
+        private bool _hasFocus;
+        private bool _isConfigured;
+        private int _generation;
+
+        private void Awake()
+        {
+            _isConfigured = _hostInput != null && _portInput != null && _roomInput != null &&
+                _connectButton != null && _captureButton != null && _disconnectButton != null &&
+                _statusText != null && _sessionText != null && _positionText != null && _inputText != null;
+            if (!_isConfigured)
+            {
+                Debug.LogError("SyncTestScene is missing Canvas references. Open the supplied scene and check SyncTestClient in the Inspector.");
+                enabled = false;
+                return;
+            }
+
+            Camera sceneCamera = Camera.main;
+            Shader shader = Resources.Load<Shader>("SyncTestWorld");
+            Mesh floorMesh = Resources.GetBuiltinResource<Mesh>("Plane.fbx");
+            _playerMesh = Resources.GetBuiltinResource<Mesh>("Capsule.fbx");
+            if (sceneCamera != null && shader != null && shader.isSupported && floorMesh != null && _playerMesh != null)
+            {
+                _viewCamera = sceneCamera.transform;
+                CreateWorldView(shader, floorMesh);
+            }
+            else
+            {
+                Debug.LogWarning("Third-person view needs a MainCamera, built-in meshes and the SyncTestWorld shader.");
+            }
+
+            Application.runInBackground = true;
+            _hasFocus = Application.isFocused;
+            RefreshView();
+        }
+
+        /// <summary>Called by the scene's Connect button on Unity's main thread.</summary>
+        public void Connect()
+        {
+            if (!_isConfigured || !isActiveAndEnabled || _client != null || _isConnecting)
+            {
+                return;
+            }
+
+            _ = ConnectAsync();
+        }
+
+        private async Task ConnectAsync()
+        {
+            string host = _hostInput.text.Trim();
+            if (host.Length == 0 || !int.TryParse(_portInput.text, out int port) || port < 1 || port > MAX_PORT ||
+                !int.TryParse(_roomInput.text, out int room) || room <= 0)
+            {
+                _status = "Enter a host, port (1-65535), and positive room ID.";
+                RefreshView();
+                return;
+            }
+
+            _isConnecting = true;
+            int generation = ++_generation;
+            _cancellation = new CancellationTokenSource();
+            var client = new ConnectionTestClient();
+            _client = client;
+            _status = "Connecting...";
+            RefreshView();
+            try
+            {
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancellation.Token))
+                {
+                    timeout.CancelAfter(TimeSpan.FromSeconds(TIMEOUT_SECONDS));
+                    await client.ConnectAsync(host, port, timeout.Token);
+                    JoinRoomResponse response = await client.JoinRoomAsync(room, timeout.Token);
+                    if (response.Result != RoomJoinResult.Success)
+                    {
+                        throw new InvalidOperationException("Join failed: " + response.Result);
+                    }
+
+                    JoinAck ack = await client.WaitForAdmissionAsync(timeout.Token);
+                    if (generation != _generation)
+                    {
+                        return;
+                    }
+
+                    _playerId = ack.PlayerId;
+                    _lastTick = ack.ServerTick;
+                    _positions[_playerId] = new Vector3(ack.X, ack.Y, ack.Z);
+                    _status = "Connected. Capture input for WASD and mouse look.";
+                }
+            }
+            catch (Exception error)
+            {
+                if (generation == _generation)
+                {
+                    Disconnect();
+                    _status = error.Message;
+                    RefreshView();
+                }
+            }
+            finally
+            {
+                if (generation == _generation)
+                {
+                    _isConnecting = false;
+                    RefreshView();
+                }
+            }
+        }
+
+        private void Update()
+        {
+            if (_client == null)
+            {
+                return;
+            }
+            if (_client.Disconnected.IsCompleted)
+            {
+                string reason = _client.DisconnectError?.Message ?? "Server closed connection.";
+                Disconnect();
+                _status = reason;
+                RefreshView();
+                return;
+            }
+            if (_playerId == 0)
+            {
+                return;
+            }
+
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                ReleaseInput();
+            }
+            bool canControl = _hasFocus && Cursor.lockState == CursorLockMode.Locked;
+            if (canControl)
+            {
+                _yawDegrees = Mathf.Repeat(_yawDegrees + Input.GetAxisRaw("Mouse X") * LOOK_SENSITIVITY, DEGREES_PER_TURN);
+                _pitchDegrees = Mathf.Clamp(_pitchDegrees - Input.GetAxisRaw("Mouse Y") * LOOK_SENSITIVITY,
+                    MIN_PITCH_DEGREES, MAX_PITCH_DEGREES);
+            }
+
+            WorldSnapshot snapshot = _client.LatestSnapshot;
+            if (snapshot != null && snapshot.ServerTick != _lastTick)
+            {
+                ApplySnapshot(snapshot);
+            }
+            RefreshTelemetry();
+
+            // A synchronous send failure can disconnect. Do not read connection state afterward.
+            if (!_isSending && Time.unscaledTime >= _nextInputSeconds)
+            {
+                float strafe = canControl ? Axis(KeyCode.D, KeyCode.A) : 0;
+                float forward = canControl ? Axis(KeyCode.W, KeyCode.S) : 0;
+                _nextInputSeconds = Time.unscaledTime + INPUT_INTERVAL_SECONDS;
+                _ = SendInputAsync(strafe, forward);
+            }
+        }
+
+        // Continuations return to Unity's main thread; only one write can be in flight.
+        private async Task SendInputAsync(float strafe, float forward)
+        {
+            ConnectionTestClient client = _client;
+            CancellationTokenSource cancellation = _cancellation;
+            if (client == null || cancellation == null)
+            {
+                return;
+            }
+
+            int generation = _generation;
+            _isSending = true;
+            try
+            {
+                MoveInput input = MovementInput.FromLocalAxes(_sequence++, strafe, forward, _yawDegrees);
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token))
+                {
+                    timeout.CancelAfter(TimeSpan.FromSeconds(TIMEOUT_SECONDS));
+                    await client.SendMoveAsync(input, timeout.Token);
+                }
+            }
+            catch (Exception error)
+            {
+                if (generation == _generation)
+                {
+                    Disconnect();
+                    _status = error.Message;
+                    RefreshView();
+                }
+            }
+            finally
+            {
+                if (generation == _generation)
+                {
+                    _isSending = false;
+                }
+            }
+        }
+
+        private void ApplySnapshot(WorldSnapshot snapshot)
+        {
+            _lastTick = snapshot.ServerTick;
+            _positions.Clear();
+            foreach (SnapshotPlayer player in snapshot.Players)
+            {
+                _positions.Add(player.PlayerId, new Vector3(player.X, player.Y, player.Z));
+            }
+        }
+
+        private void CreateWorldView(Shader shader, Mesh floorMesh)
+        {
+            _floorMaterial = new Material(shader) { color = new Color(0.11f, 0.15f, 0.21f) };
+            _floorMaterial.SetFloat("_Grid", 1f);
+            _localMaterial = new Material(shader) { color = new Color(0.32f, 0.95f, 0.48f) };
+            _remoteMaterial = new Material(shader) { color = new Color(0.27f, 0.76f, 1f) };
+
+            Vector3 meshSize = floorMesh.bounds.size;
+            var floorScale = new Vector3(FLOOR_SIZE_METERS / meshSize.x, 1f, FLOOR_SIZE_METERS / meshSize.z);
+            CreateVisual("Grid floor", floorMesh, transform, Vector3.down * 0.02f, floorScale, _floorMaterial);
+        }
+
+        private void LateUpdate()
+        {
+            if (_viewCamera == null)
+            {
+                return;
+            }
+
+            _departedPlayers.Clear();
+            foreach (var marker in _markers)
+            {
+                if (!_positions.ContainsKey(marker.Key))
+                {
+                    RemoveMarker(marker.Value);
+                    _departedPlayers.Add(marker.Key);
+                }
+            }
+            foreach (long playerId in _departedPlayers)
+            {
+                _markers.Remove(playerId);
+            }
+
+            foreach (var player in _positions)
+            {
+                bool isLocalPlayer = player.Key == _playerId;
+                if (!_markers.TryGetValue(player.Key, out Transform marker))
+                {
+                    marker = new GameObject(isLocalPlayer ? $"Me {player.Key}" : $"Player {player.Key}").transform;
+                    marker.SetParent(transform, false);
+                    CreateVisual("Body", _playerMesh, marker, Vector3.up * 0.9f,
+                        new Vector3(0.65f, 0.9f, 0.65f), isLocalPlayer ? _localMaterial : _remoteMaterial);
+                    _markers.Add(player.Key, marker);
+                }
+
+                marker.position = player.Value;
+                if (isLocalPlayer)
+                {
+                    marker.rotation = Quaternion.Euler(0f, _yawDegrees, 0f);
+                }
+            }
+
+            _positions.TryGetValue(_playerId, out Vector3 position);
+            Quaternion yaw = Quaternion.Euler(0f, _yawDegrees, 0f);
+            Quaternion orbit = Quaternion.Euler(_pitchDegrees, _yawDegrees, 0f);
+            Vector3 pivot = position + Vector3.up * CAMERA_HEIGHT_METERS;
+            // Frame the local player to the right of the connection panel.
+            pivot -= yaw * Vector3.right * CAMERA_SIDE_OFFSET_METERS;
+            _viewCamera.SetPositionAndRotation(pivot + orbit * Vector3.back * CAMERA_DISTANCE_METERS, orbit);
+        }
+
+        private static void CreateVisual(string name, Mesh mesh, Transform parent,
+            Vector3 offsetMeters, Vector3 scale, Material material)
+        {
+            var visual = new GameObject(name);
+            visual.transform.SetParent(parent, false);
+            visual.transform.localPosition = offsetMeters;
+            visual.transform.localScale = scale;
+            visual.AddComponent<MeshFilter>().sharedMesh = mesh;
+            visual.AddComponent<MeshRenderer>().sharedMaterial = material;
+        }
+
+        private static void RemoveMarker(Transform marker)
+        {
+            marker.gameObject.SetActive(false);
+            Destroy(marker.gameObject);
+        }
+
+        /// <summary>Called by the scene's Capture button on Unity's main thread.</summary>
+        public void CaptureInput()
+        {
+            if (_playerId == 0 || !isActiveAndEnabled)
+            {
+                return;
+            }
+
+            UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null);
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            _nextInputSeconds = 0;
+            RefreshTelemetry();
+        }
+
+        private void RefreshView()
+        {
+            if (!_isConfigured)
+            {
+                return;
+            }
+
+            bool canConnect = _client == null && !_isConnecting;
+            _hostInput.interactable = canConnect;
+            _portInput.interactable = canConnect;
+            _roomInput.interactable = canConnect;
+            _connectButton.interactable = canConnect;
+            _captureButton.interactable = _playerId != 0;
+            _disconnectButton.interactable = _client != null;
+            _statusText.text = _status;
+            RefreshTelemetry();
+        }
+
+        private void RefreshTelemetry()
+        {
+            if (!_isConfigured)
+            {
+                return;
+            }
+
+            _sessionText.text = $"Player ID: {_playerId}    Tick: {_lastTick}    Players: {_positions.Count}";
+            _positionText.text = _playerId != 0 && _positions.TryGetValue(_playerId, out Vector3 position)
+                ? "My server position (m)\n" + FormatPosition(position)
+                : "My server position (m)\nX: --    Y: --    Z: --";
+            bool canControl = _hasFocus && Cursor.lockState == CursorLockMode.Locked && _playerId != 0;
+            _inputText.text = string.Format(CultureInfo.InvariantCulture, "Input: {0}    Yaw: {1:F1} deg",
+                canControl ? "WASD / Mouse look / Esc releases" : "Released", _yawDegrees);
+        }
+
+        private void OnDrawGizmos()
+        {
+#if UNITY_EDITOR
+            if (Camera.current == null || Camera.current.cameraType != CameraType.SceneView)
+            {
+                return;
+            }
+
+            Color previousColor = Gizmos.color;
+            foreach (var player in _positions)
+            {
+                bool isLocalPlayer = player.Key == _playerId;
+                Gizmos.color = isLocalPlayer ? Color.green : Color.cyan;
+                Gizmos.DrawWireSphere(player.Value, GIZMO_RADIUS_METERS);
+                Gizmos.DrawLine(player.Value - Vector3.right * GIZMO_RADIUS_METERS, player.Value + Vector3.right * GIZMO_RADIUS_METERS);
+                Gizmos.DrawLine(player.Value - Vector3.forward * GIZMO_RADIUS_METERS, player.Value + Vector3.forward * GIZMO_RADIUS_METERS);
+                string identity = isLocalPlayer ? "ME " : "PLAYER ";
+                UnityEditor.Handles.Label(player.Value + Vector3.up * (GIZMO_RADIUS_METERS * 2),
+                    identity + player.Key + "\n" + FormatPosition(player.Value));
+            }
+            Gizmos.color = previousColor;
+#endif
+        }
+
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            _hasFocus = hasFocus;
+            if (!hasFocus)
+            {
+                ReleaseInput();
+            }
+        }
+
+        private void ReleaseInput()
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            _nextInputSeconds = 0;
+            RefreshTelemetry();
+        }
+
+        private void OnDisable()
+        {
+            Disconnect();
+        }
+
+        private void OnDestroy()
+        {
+            Destroy(_floorMaterial);
+            Destroy(_localMaterial);
+            Destroy(_remoteMaterial);
+        }
+
+        /// <summary>Cancels the active connection and clears snapshot markers on Unity's main thread.</summary>
+        public void Disconnect()
+        {
+            ++_generation;
+            CancellationTokenSource cancellation = _cancellation;
+            ConnectionTestClient client = _client;
+            _cancellation = null;
+            _client = null;
+            _isConnecting = false;
+            _isSending = false;
+            _playerId = 0;
+            _lastTick = 0;
+            _sequence = 0;
+            _yawDegrees = 0;
+            _pitchDegrees = DEFAULT_PITCH_DEGREES;
+            _positions.Clear();
+            foreach (Transform marker in _markers.Values)
+            {
+                RemoveMarker(marker);
+            }
+            _markers.Clear();
+            cancellation?.Cancel();
+            client?.Dispose();
+            cancellation?.Dispose();
+            ReleaseInput();
+            _status = "Disconnected";
+            RefreshView();
+        }
+
+        private static string FormatPosition(Vector3 position)
+        {
+            return string.Format(CultureInfo.InvariantCulture, "X: {0:F3}    Y: {1:F3}    Z: {2:F3}",
+                position.x, position.y, position.z);
+        }
+
+        private static float Axis(KeyCode positive, KeyCode negative)
+        {
+            return (Input.GetKey(positive) ? 1 : 0) - (Input.GetKey(negative) ? 1 : 0);
+        }
+    }
+}

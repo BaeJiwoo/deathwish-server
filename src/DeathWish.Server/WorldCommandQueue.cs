@@ -8,16 +8,18 @@ internal sealed class WorldCommandQueue
     private readonly Queue<WorldCommand> _commands = new();
     private readonly HashSet<WorldAdmission> _admissions = new();
     private readonly int _capacity;
+    private readonly TimeProvider _timeProvider;
     private bool _accepting = true;
 
     internal int PendingCount { get { lock (_sync) return _commands.Count; } }
     internal int AdmissionCount { get { lock (_sync) return _admissions.Count; } }
     internal bool IsAccepting { get { lock (_sync) return _accepting; } }
 
-    internal WorldCommandQueue(int capacity)
+    internal WorldCommandQueue(int capacity, TimeProvider? timeProvider = null)
     {
         if (capacity < 1) throw new ArgumentOutOfRangeException(nameof(capacity));
         _capacity = capacity;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     internal bool TryEnqueueJoin(ClientSession session, [NotNullWhen(true)] out WorldAdmission? admission)
@@ -28,7 +30,7 @@ internal sealed class WorldCommandQueue
             admission = null;
             if (!_accepting || session.IsDisconnected || _admissions.Count >= _capacity) return false;
 
-            admission = new WorldAdmission(session);
+            admission = new WorldAdmission(session, _timeProvider);
             _admissions.Add(admission);
             _commands.Enqueue(new WorldCommand(WorldCommandType.Join, admission));
             return true;

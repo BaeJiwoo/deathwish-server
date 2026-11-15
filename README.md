@@ -33,7 +33,7 @@ dotnet run --project src/DeathWish.Server -- 127.0.0.1 7777
 
 ## 개발 진행
 
-현재 TCP 연결, 고정 틱, 월드 입장·퇴장과 입장 완료 응답(JoinAck), 송신 대기량 제한까지 구현했으며 Stage 5 리뷰 대기 상태입니다. MockClient의 /join은 PlayerId, 생성 Tick, 스폰 위치를 표시합니다. Windows 메모리 내 검사는 통과했으며 실제 TCP 검증은 실행 환경의 연결 제한으로 미확인입니다. 다음 단계는 서버 권한 이동과 스냅숏 동기화입니다.
+Stage 7 snapshots and WASD clients are implemented and awaiting review. Unity's SyncTestScene displays local server coordinates on its preplaced Canvas, shows players in a third-person Game view, and keeps Scene-view Gizmos for diagnostics. Run the installer to update the Unity client. Follow the [server test guide](docs/Testing.md) for VS Code, MockClient and Unity checks.
 
 단계별 구현 항목과 리뷰 기준은 [구현 계획](docs/ImplementationPlan.md), 코딩 규칙은 [AGENTS.md](AGENTS.md)에 기록합니다. 각 단계를 구현·검증한 뒤 코드 리뷰를 거쳐 다음 단계로 진행합니다.
 
@@ -42,3 +42,11 @@ dotnet run --project src/DeathWish.Server -- 127.0.0.1 7777
 - **서버 권한 기반 전투:** 서버가 이동, 사격, 피격 등 주요 게임 상태와 전투 결과를 판정하는 시스템 구축
 - **매치메이킹:** 플레이어의 매치 참가 요청부터 게임 서버 입장까지 이어지는 시스템 구현
 - **플레이 데이터 수집 및 추적:** 게임 플레이 기록을 수집하고, 향후 데이터 분석 파이프라인으로 확장
+
+## WASD movement test
+
+Manual steps, expected results and troubleshooting: [서버 테스트 가이드](docs/Testing.md).
+
+Console `/join 1` → `/wasd`; Unity setup and manual verification: [movement guide](integrations/Unity/README.md).
+
+Unity opening error `Char: 65279`: rerun `integrations/Unity/Install.ps1` with Unity closed; it repairs the UTF-8 BOM and updates the client. Console WASD now requires a standalone Console Host window; use `mockclient/Start-MockClient.ps1` instead of a VS Code/Windows Terminal tab.

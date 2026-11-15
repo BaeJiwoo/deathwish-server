@@ -12,9 +12,10 @@ public sealed class RoomManager
     private bool _accepting = true;
 
     public RoomManager(SessionManager sessions, int roomCount = ServerOptions.DefaultRoomCount)
-        : this(sessions, roomCount, GameWorld.DefaultAdmissionCapacity, GameWorld.DefaultMaxCommandsPerTick) { }
+        : this(sessions, roomCount, GameWorld.DEFAULT_ADMISSION_CAPACITY, GameWorld.DEFAULT_MAX_COMMANDS_PER_TICK) { }
 
-    internal RoomManager(SessionManager sessions, int roomCount, int admissionCapacity, int maxCommandsPerTick)
+    internal RoomManager(SessionManager sessions, int roomCount, int admissionCapacity, int maxCommandsPerTick,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(sessions);
         if (roomCount < 1) throw new ArgumentOutOfRangeException(nameof(roomCount));
@@ -24,7 +25,7 @@ public sealed class RoomManager
         for (int index = 0; index < roomCount; index++)
         {
             int roomId = index + 1;
-            _rooms.Add(roomId, new Room(roomId, _sync, admissionCapacity, maxCommandsPerTick));
+            _rooms.Add(roomId, new Room(roomId, _sync, admissionCapacity, maxCommandsPerTick, timeProvider));
         }
     }
 
@@ -58,6 +59,22 @@ public sealed class RoomManager
             room.Add(sessionId);
             _membership.Add(sessionId, new Membership(room, admission));
             return RoomJoinResult.Success;
+        }
+    }
+
+    /// <summary>Associates input with the connection's current admission. Does not mutate player state.</summary>
+    internal bool SubmitMovement(Guid sessionId, MoveInput input)
+    {
+        input.Validate();
+        lock (_sync)
+        {
+            if (!_accepting || !_membership.TryGetValue(sessionId, out var membership) ||
+                membership.Admission.IsDeparted || membership.Admission.Session.IsDisconnected)
+            {
+                return false;
+            }
+
+            return membership.Admission.Movement.TrySetInput(input);
         }
     }
 

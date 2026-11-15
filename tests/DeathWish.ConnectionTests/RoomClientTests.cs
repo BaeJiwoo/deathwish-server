@@ -23,8 +23,9 @@ static class RoomClientTests
         var workerGroup = new MultithreadEventLoopGroup(1);
         var connections = new DefaultChannelGroup(acceptGroup.GetNext());
         var sessions = new SessionManager();
-        var rooms = new RoomManager(sessions);
         var clock = new ManualTimeProvider();
+        var rooms = new RoomManager(sessions, 2, GameWorld.DEFAULT_ADMISSION_CAPACITY,
+            GameWorld.DEFAULT_MAX_COMMANDS_PER_TICK, clock);
         using var worldCancellation = new CancellationTokenSource();
         var worldLoop = new WorldLoop(rooms.GetWorlds(), 10, clock);
         Task worldTask = worldLoop.RunAsync(worldCancellation.Token);
@@ -65,6 +66,35 @@ static class RoomClientTests
                 throw new Exception("TCP room admission did not create two distinct world players");
             if (await first.EchoAsync("after join", deadline.Token) != "after join")
                 throw new Exception("Echo after admission failed");
+
+            await first.SendMoveAsync(new MoveInput(0, 1, 0), deadline.Token);
+            await first.EchoAsync("movement received", deadline.Token);
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            await clock.NextDelayAsync();
+            players = room.World.GetPlayers();
+            if (Math.Abs(players.Single(player => player.PlayerId == firstAck.PlayerId).Position.X - .5f) > .0001f ||
+                players.Single(player => player.PlayerId == secondAck.PlayerId).Position != System.Numerics.Vector3.Zero)
+            {
+                throw new Exception("TCP movement did not apply exclusively to its sender");
+            }
+
+            while (first.LatestSnapshot?.ServerTick != 2 || second.LatestSnapshot?.ServerTick != 2)
+            {
+                await Task.Delay(1, deadline.Token);
+            }
+            if (!SnapshotCodec.Encode(first.LatestSnapshot!).SequenceEqual(SnapshotCodec.Encode(second.LatestSnapshot!)) ||
+                first.LatestSnapshot!.Players.Count != 2 ||
+                Math.Abs(first.LatestSnapshot.Players.Single(player => player.PlayerId == firstAck.PlayerId).X - .5f) > .0001f)
+            {
+                throw new Exception("TCP clients received different world snapshots.");
+            }
+
+            clock.Advance(TimeSpan.FromMilliseconds(200));
+            await clock.NextDelayAsync();
+            if (Math.Abs(room.World.GetPlayers().Single(player => player.PlayerId == firstAck.PlayerId).Position.X - .5f) > .0001f)
+            {
+                throw new Exception("Expired TCP input continued moving during catch-up");
+            }
 
             await listener.CloseAsync();
             await connections.CloseAsync();

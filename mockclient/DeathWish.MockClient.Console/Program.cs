@@ -1,5 +1,6 @@
 using DeathWish.MockClient.Core;
 using DeathWish.Protocol;
+using System.Globalization;
 
 if (args.Length > 3 || !int.TryParse(args.ElementAtOrDefault(1) ?? "7777", out int port) || port is < 1 or > 65535)
 {
@@ -23,7 +24,10 @@ try
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         await client.ConnectAsync(args.ElementAtOrDefault(0) ?? "127.0.0.1", port, timeout.Token);
     }
-    Console.WriteLine("Connected. Enter a message, /join <roomId>, or /quit to disconnect.");
+    Console.WriteLine("Connected. Enter a message, /join <roomId>, /move <x> <z>, /wasd, or /quit to disconnect.");
+    uint movementSequence = 0;
+    bool hasWorldAdmission = false;
+    long localPlayerId = 0;
 
     do
     {
@@ -64,9 +68,49 @@ try
             if (response.Result == RoomJoinResult.Success)
             {
                 JoinAck ack = await client.WaitForAdmissionAsync(timeout.Token);
+                hasWorldAdmission = true;
+                localPlayerId = ack.PlayerId;
                 Console.WriteLine($"World ready: PlayerId={ack.PlayerId}, ServerTick={ack.ServerTick}, Spawn=({ack.X}, {ack.Y}, {ack.Z})");
             }
             if (args.Length == 3 && response.Result != RoomJoinResult.Success) return 1;
+        }
+        else if (parts.FirstOrDefault() == "/wasd")
+        {
+            if (!hasWorldAdmission)
+            {
+                Console.Error.WriteLine("Join a room before starting WASD mode.");
+                continue;
+            }
+            movementSequence = await WasdMode.RunAsync(client, localPlayerId, movementSequence, cancellation.Token);
+            Console.WriteLine("Enter /wasd, /move, a message, or /quit.");
+        }
+        else if (parts.FirstOrDefault() == "/move")
+        {
+            if (parts.Length != 3 ||
+                !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float x) ||
+                !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float z) ||
+                !float.IsFinite(x) || !float.IsFinite(z) || Math.Abs(x) > 1 || Math.Abs(z) > 1)
+            {
+                Console.Error.WriteLine("Usage: /move <x> <z>, each component within [-1, 1]. Use /move 0 0 to stop.");
+                if (args.Length == 3)
+                {
+                    return 1;
+                }
+                continue;
+            }
+            if (!hasWorldAdmission)
+            {
+                Console.Error.WriteLine("Join a room before sending movement.");
+                if (args.Length == 3)
+                {
+                    return 1;
+                }
+                continue;
+            }
+
+            await client.SendMoveAsync(new MoveInput(movementSequence, x, z), timeout.Token);
+            Console.WriteLine($"Movement sent: sequence={movementSequence}, X={x}, Z={z}. Expires without refresh; snapshots arrive asynchronously.");
+            movementSequence = unchecked(movementSequence + 1);
         }
         else
         {

@@ -37,6 +37,9 @@ static void VerifyEcho(byte[] request, string expected, int split)
 }
 
 ServerOptionsTests.Run();
+MovementInputTests.Run();
+await SnapshotTests.RunAsync();
+await MovementTests.RunAsync();
 await AdmissionResponseTests.RunAsync();
 await WorldLoopTests.RunAsync();
 await WorldAdmissionTests.RunAsync();

@@ -33,7 +33,8 @@ public sealed class GameServer
         cancellationToken.ThrowIfCancellationRequested();
 
         var sessions = new SessionManager();
-        var rooms = new RoomManager(sessions, _roomCount);
+        var rooms = new RoomManager(sessions, _roomCount, GameWorld.DEFAULT_ADMISSION_CAPACITY,
+            GameWorld.DEFAULT_MAX_COMMANDS_PER_TICK, _timeProvider);
         var worldLoop = new WorldLoop(rooms.GetWorlds(), _tickRate, _timeProvider);
         using var loopCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task? worldTask = null;
@@ -53,7 +54,7 @@ public sealed class GameServer
                 .ChildHandler(new ActionChannelInitializer<IChannel>(channel =>
                 {
                     connections.Add(channel);
-                    channel.Pipeline.AddLast(new LengthFieldBasedFrameDecoder(PacketCodec.HeaderSize + PacketCodec.MaxPayloadLength, 0, 2, 1, 0));
+                    channel.Pipeline.AddLast(new LengthFieldBasedFrameDecoder(PacketCodec.HEADER_SIZE + PacketCodec.MAX_PAYLOAD_LENGTH, 0, 2, 1, 0));
                     channel.Pipeline.AddLast(new GameChannelHandler(sessions, rooms));
                 }));
 

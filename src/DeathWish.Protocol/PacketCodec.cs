@@ -11,13 +11,19 @@ public enum MessageType : byte
     EchoResponse = 2,
     JoinRoomRequest = 3,
     JoinRoomResponse = 4,
-    JoinAck = 5
+    JoinAck = 5,
+    MoveInput = 6,
+    WorldSnapshot = 7
 }
 
 public static class PacketCodec
 {
-    public const int HeaderSize = 3;
-    public const int MaxPayloadLength = 4096;
+    private const int MOVE_INPUT_PAYLOAD_SIZE = 12;
+    private const int MOVE_SEQUENCE_OFFSET = 0;
+    private const int MOVE_X_OFFSET = 4;
+    private const int MOVE_Z_OFFSET = 8;
+    public const int HEADER_SIZE = 3;
+    public const int MAX_PAYLOAD_LENGTH = 4096;
     private static readonly UTF8Encoding Encoding = new UTF8Encoding(false, true);
 
     public static byte[] EncodeEcho(MessageType type, string message)
@@ -26,25 +32,48 @@ public static class PacketCodec
         if (type != MessageType.EchoRequest && type != MessageType.EchoResponse)
             throw new ArgumentException("Expected an Echo message type.", nameof(type));
         int length = Encoding.GetByteCount(message);
-        if (length > MaxPayloadLength) throw new ArgumentException("Payload exceeds 4096 UTF-8 bytes.", nameof(message));
+        if (length > MAX_PAYLOAD_LENGTH) throw new ArgumentException("Payload exceeds 4096 UTF-8 bytes.", nameof(message));
 
-        byte[] frame = new byte[HeaderSize + length];
+        byte[] frame = new byte[HEADER_SIZE + length];
         frame[0] = (byte)(length >> 8);
         frame[1] = (byte)length;
         frame[2] = (byte)type;
-        Encoding.GetBytes(message, 0, message.Length, frame, HeaderSize);
+        Encoding.GetBytes(message, 0, message.Length, frame, HEADER_SIZE);
         return frame;
     }
 
     public static string DecodeEcho(byte[] payload) => Encoding.GetString(payload);
 
+    public static byte[] EncodeMoveInput(MoveInput input)
+    {
+        input.Validate();
+        byte[] frame = new byte[HEADER_SIZE + MOVE_INPUT_PAYLOAD_SIZE];
+        frame[1] = MOVE_INPUT_PAYLOAD_SIZE;
+        frame[2] = (byte)MessageType.MoveInput;
+        Span<byte> payload = frame.AsSpan(HEADER_SIZE);
+        BinaryPrimitives.WriteUInt32BigEndian(payload.Slice(MOVE_SEQUENCE_OFFSET), input.Sequence);
+        BinaryPrimitives.WriteInt32BigEndian(payload.Slice(MOVE_X_OFFSET), BitConverter.SingleToInt32Bits(input.X));
+        BinaryPrimitives.WriteInt32BigEndian(payload.Slice(MOVE_Z_OFFSET), BitConverter.SingleToInt32Bits(input.Z));
+        return frame;
+    }
+
+    public static MoveInput DecodeMoveInput(byte[] payload)
+    {
+        ValidatePayloadLength(payload, MOVE_INPUT_PAYLOAD_SIZE);
+        var input = new MoveInput(BinaryPrimitives.ReadUInt32BigEndian(payload.AsSpan(MOVE_SEQUENCE_OFFSET)),
+            BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(MOVE_X_OFFSET))),
+            BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(MOVE_Z_OFFSET))));
+        input.Validate();
+        return input;
+    }
+
     public static byte[] EncodeJoinRoomRequest(JoinRoomRequest request)
     {
         ValidateRoomId(request.RoomId);
-        byte[] frame = new byte[HeaderSize + 4];
+        byte[] frame = new byte[HEADER_SIZE + 4];
         frame[1] = 4;
         frame[2] = (byte)MessageType.JoinRoomRequest;
-        BinaryPrimitives.WriteInt32BigEndian(frame.AsSpan(HeaderSize, 4), request.RoomId);
+        BinaryPrimitives.WriteInt32BigEndian(frame.AsSpan(HEADER_SIZE, 4), request.RoomId);
         return frame;
     }
 
@@ -60,11 +89,11 @@ public static class PacketCodec
     {
         ValidateRoomId(response.RoomId);
         ValidateRoomJoinResult(response.Result);
-        byte[] frame = new byte[HeaderSize + 5];
+        byte[] frame = new byte[HEADER_SIZE + 5];
         frame[1] = 5;
         frame[2] = (byte)MessageType.JoinRoomResponse;
-        BinaryPrimitives.WriteInt32BigEndian(frame.AsSpan(HeaderSize, 4), response.RoomId);
-        frame[HeaderSize + 4] = (byte)response.Result;
+        BinaryPrimitives.WriteInt32BigEndian(frame.AsSpan(HEADER_SIZE, 4), response.RoomId);
+        frame[HEADER_SIZE + 4] = (byte)response.Result;
         return frame;
     }
 
@@ -81,10 +110,10 @@ public static class PacketCodec
     public static byte[] EncodeJoinAck(JoinAck ack)
     {
         ValidateJoinAck(ack);
-        byte[] frame = new byte[HeaderSize + 32];
+        byte[] frame = new byte[HEADER_SIZE + 32];
         frame[1] = 32;
         frame[2] = (byte)MessageType.JoinAck;
-        Span<byte> payload = frame.AsSpan(HeaderSize);
+        Span<byte> payload = frame.AsSpan(HEADER_SIZE);
         BinaryPrimitives.WriteInt32BigEndian(payload, ack.RoomId);
         BinaryPrimitives.WriteInt64BigEndian(payload.Slice(4), ack.PlayerId);
         BinaryPrimitives.WriteInt64BigEndian(payload.Slice(12), ack.ServerTick);
@@ -139,7 +168,8 @@ public static class PacketCodec
     internal static void ValidateType(MessageType type)
     {
         if (type != MessageType.EchoRequest && type != MessageType.EchoResponse &&
-            type != MessageType.JoinRoomRequest && type != MessageType.JoinRoomResponse && type != MessageType.JoinAck)
+            type != MessageType.JoinRoomRequest && type != MessageType.JoinRoomResponse && type != MessageType.JoinAck &&
+            type != MessageType.MoveInput && type != MessageType.WorldSnapshot)
             throw new InvalidDataException("Unknown message type.");
     }
 }
@@ -147,7 +177,7 @@ public static class PacketCodec
 /// <summary>Connection-owned decoder. Call sequentially. Callback receives an independently owned payload.</summary>
 public sealed class PacketReader
 {
-    private readonly byte[] _header = new byte[PacketCodec.HeaderSize];
+    private readonly byte[] _header = new byte[PacketCodec.HEADER_SIZE];
     private int _headerLength;
     private byte[]? _payload;
     private int _payloadLength;
@@ -168,9 +198,14 @@ public sealed class PacketReader
                 if (_headerLength < _header.Length) return;
 
                 int length = (_header[0] << 8) | _header[1];
-                if (length > PacketCodec.MaxPayloadLength) throw new InvalidDataException("Payload exceeds 4096 bytes.");
+
                 _type = (MessageType)_header[2];
                 PacketCodec.ValidateType(_type);
+                int maximum = _type == MessageType.WorldSnapshot ? SnapshotCodec.MAX_PAYLOAD_LENGTH : PacketCodec.MAX_PAYLOAD_LENGTH;
+                if (length > maximum)
+                {
+                    throw new InvalidDataException("Payload exceeds message limit.");
+                }
                 _payload = new byte[length];
             }
 

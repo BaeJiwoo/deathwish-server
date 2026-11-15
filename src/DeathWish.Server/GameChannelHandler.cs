@@ -43,6 +43,13 @@ public sealed class GameChannelHandler : SimpleChannelInboundHandler<IByteBuffer
         byte[] frame;
         switch (type)
         {
+            case MessageType.MoveInput:
+                MoveInput input = PacketCodec.DecodeMoveInput(payload);
+                if (Session is not null)
+                {
+                    _rooms.SubmitMovement(Session.SessionId, input);
+                }
+                return;
             case MessageType.EchoRequest:
                 string message = PacketCodec.DecodeEcho(payload);
                 Console.WriteLine($"Received [{context.Channel.RemoteAddress}]: {System.Text.Json.JsonSerializer.Serialize(message)}");

@@ -10,7 +10,7 @@ The server and MockClient share `DeathWish.Protocol` (.NET Standard 2.1). This r
 | 2 | 1 byte | Message type |
 | 3 | N bytes | Payload |
 
-Maximum payload length is 4096 bytes. A complete frame is 3 + N bytes. Zero-length payloads are valid. Header and payload may arrive across multiple reads; one read may contain multiple frames. Each connection owns a PacketReader. Completed payload arrays belong to the recipient.
+Maximum payload length is 4096 bytes for messages 1–6. WorldSnapshot (7) permits up to 20,494 bytes for 1,024 players; this exception applies only to server-to-client snapshots. The inbound server length decoder remains limited to 4,099-byte frames. A complete frame is 3 + N bytes. Zero-length payloads are valid. Header and payload may arrive across multiple reads; one read may contain multiple frames. Each connection owns a PacketReader. Completed payload arrays belong to the recipient.
 
 ## Message types
 
@@ -21,6 +21,8 @@ Maximum payload length is 4096 bytes. A complete frame is 3 + N bytes. Zero-leng
 | 3 | JoinRoomRequest | Client to server | RoomId: signed int32, big-endian |
 | 4 | JoinRoomResponse | Server to client | Requested RoomId: signed int32, big-endian; result: byte |
 | 5 | JoinAck | Server to client | RoomId, PlayerId, ServerTick, spawn X/Y/Z |
+| 6 | MoveInput | Client to server | Sequence: uint32; direction X/Z: float32 |
+| 7 | WorldSnapshot | Server to client | RoomId, ServerTick, player count, complete player states |
 
 Example request for `Hi`: `00 02 01 48 69`. Response: `00 02 02 48 69`.
 LF, CR, and NUL are valid payload characters. Unknown types, incorrect direction, invalid UTF-8, or oversized lengths close the connection. Oversized lengths are rejected after reading the header, before allocating the body. Incomplete frames at disconnect are discarded; the client reports truncated responses as errors.
@@ -186,7 +188,7 @@ Only creation emits JoinAck; repeated same-room joins return another JoinRoomRes
 Other reliable responses retain FIFO enqueue order and may appear between acceptance and completion.
 Departure before creation can suppress JoinAck. Disconnect after creation may prevent delivery;
 normal departure cleanup removes the player. A received JoinAck reports admission at its tick, not ongoing connectivity.
-No snapshot or broadcast is sent. Old clients reject type 5; deploy the updated protocol and client together.
+World snapshots now follow admission as described in Stage 7 below. Old clients reject types 5 and 7; deploy the updated protocol and client together.
 
 ClientSession owns a FIFO limited to 64 frames and 262144 bytes, including its one in-flight write.
 Overflow rejects the new frame, discards queued frames, and closes the connection. Each submitted write
@@ -202,3 +204,109 @@ After successful JoinRoomAsync, call WaitForAdmissionAsync with a cancellation t
 unsolicited, wrong-room, or malformed JoinAck closes the connection. Cancellation while waiting closes
  the connection; disconnect fails an incomplete admission wait. The console's /join waits for completion
 and prints PlayerId, ServerTick, and spawn within the existing five-second command deadline.
+
+## Server-authoritative movement (Stage 6)
+
+MoveInput (type 6) has exactly 12 payload bytes, 15 including the header. The client sends input,
+not position, elapsed time, speed, RoomId or PlayerId. The handler uses its own session and current
+admission to identify the player. The message has no response; successful local sending does not
+confirm that the world has applied the input.
+
+| Payload offset | Size | Field |
+| --- | --- | --- |
+| 0 | 4 | Sequence: uint32, big-endian |
+| 4 | 4 | Direction X: IEEE-754 binary32 bits, big-endian |
+| 8 | 4 | Direction Z: IEEE-754 binary32 bits, big-endian |
+
+Example: sequence 16909060 (0x01020304), X=1, Z=-0.5:
+`00 0C 06 01 02 03 04 3F 80 00 00 BF 00 00 00`.
+Both components must be finite and in [-1, 1]. Zero and negative zero are valid. Invalid component
+values or payload lengths close the connection and trigger departure cleanup. A valid input before
+room membership, after departure, or during shutdown is silently ignored. Servers never send type 6;
+a client receiving it treats it as a direction error. Existing message layouts remain unchanged.
+Older servers reject type 6, so update both endpoints. Shared source constants HEADER_SIZE and
+MAX_PAYLOAD_LENGTH replace their former PascalCase names; this rename does not change the wire format.
+
+### Direction, speed and tick ordering
+
+Movement is on the XZ ground plane: +X right, +Z forward, +Y up, one unit = one meter. Input does not
+change Y. A direction with length greater than 1 is normalized; a shorter direction retains its analog
+magnitude. The maximum speed is 5 meters per second, currently a code constant, not a runtime option.
+Each world tick processes its bounded Join/Leave batch first, then updates each active player's position
+once: position += direction * 5 * fixedDeltaSeconds. Packet count never multiplies movement distance.
+(0, 0) stops movement on the next tick. No collision, gravity, jumping, map bounds or acceleration is included.
+
+One lock-protected latest-input slot belongs to each admission token; movement does not enqueue world
+commands. Newer packets replace the slot, so a burst cannot consume Join/Leave queue capacity. The world
+loop alone modifies PlayerState and publishes copied states after movement. The slot's storage is bounded
+by admission capacity. This is not a transport packet-rate limiter; decoding still costs work per packet.
+
+Input may be stored while accepted admission is awaiting creation. It retains its original receipt age;
+old pending input is not refreshed by spawning. JoinAck reports the spawn position before movement in the
+creation tick. MockClient only sends movement after receiving JoinAck. Departure closes and clears the slot;
+a departing player cannot continue moving while its Leave command waits. Rejoining allocates a new slot
+and resets sequence history. World shutdown closes all slots before clearing players.
+
+### Sequence ordering and expiration
+
+The first valid sequence for an admission may be any uint32, including zero. A subsequent sequence is newer
+only when unchecked(candidate - previous) is strictly between 0 and 0x80000000. Equal, older and exactly
+half-range differences are ignored. Thus uint.MaxValue followed by 0 is valid. Clients increment modulo
+2^32 and must not jump ahead by 2^31 or more. Rejected sequences do not replace direction or refresh age.
+
+Accepted input is timestamped using the server's monotonic TimeProvider when the handler stores it.
+At each movement update, age >= 250 ms produces zero movement. Sequence history remains after expiry;
+a newer sequence is required to resume. Expiry uses elapsed real time, not simulation tick count, so stale
+input stays stopped after a long pause or during catch-up ticks. The boundary is sampled per player at its
+movement update; no fractional-tick integration is performed. Send refreshed held input regularly, for
+example at 30 Hz. No client timestamp is trusted. Wall-clock date changes do not determine movement expiry.
+
+### MockClient and verification
+
+After JoinRoomAsync and WaitForAdmissionAsync, call SendMoveAsync(new MoveInput(sequence, x, z), token).
+Await each send/request before starting another: Echo, join and movement share the single-operation guard
+so stream writes cannot interleave. Local invalid input or a pre-admission call fails before writing;
+cancellation or I/O failure after sending starts closes the connection. There is no MoveInput response.
+
+For manual use, start the server and interactive Console as above, then enter:
+
+```text
+/join 1
+/move 1 0
+/move 0 0
+```
+
+The Console increments its sequence and sends one input per /move command. It does not continuously refresh
+held input; a nonzero command expires after 250 ms without another fresh command. Invalid syntax does not
+disconnect an interactive client. The /move command reports sending only;
+use /wasd to refresh held input and display the authoritative position from WorldSnapshot. See Stage 7 below.
+
+
+## WorldSnapshot (Stage 7)
+
+All integer fields and IEEE 754 float32 bit patterns use big-endian byte order.
+
+| Payload offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 4 | Positive int32 RoomId |
+| 4 | 8 | Positive int64 ServerTick, after this tick's movement |
+| 12 | 2 | uint16 PlayerCount, 0–1024 |
+| 14 + 20*i | 8 | Positive int64 PlayerId |
+| 22 + 20*i | 4 | float32 X in meters |
+| 26 + 20*i | 4 | float32 Y in meters |
+| 30 + 20*i | 4 | float32 Z in meters |
+
+Payload length must equal `14 + 20 * PlayerCount`. Player IDs must be unique, coordinates finite; server entries are ordered by PlayerId. This is a full room snapshot: create unknown IDs, update included positions and remove absent IDs. Session IDs are never transmitted. The client's own admitted player must remain present while connected. Core rejects snapshots before JoinAck, wrong rooms, ticks before admission and non-increasing snapshot ticks. It retains only the latest immutable snapshot, accessible from the UI thread through `LatestSnapshot`.
+
+At default 30 Hz, the world broadcasts after every third tick (10 Hz), following lifecycle processing and movement. A simulation-time accumulator supports other tick rates, emitting no more than once per tick. JoinRoomResponse precedes JoinAck, which precedes that connection's first snapshot. Both clients in one room receive the same encoded snapshot for a given tick. Slow clients may skip ticks.
+
+Reliable responses retain their FIFO. Each session also has at most one unsent snapshot, replaced by newer snapshots; the one in-flight frame is never replaced. Reliable frames are selected first. Both queues and the in-flight frame count toward 64 frames / 256 KiB; overflow or a five-second write timeout closes the session. World ticks never await network completion. The snapshot array is shared read-only among recipients and remains immutable for the transport lifetime.
+
+Snapshot support is a protocol extension without negotiation: update server and clients together. Older clients reject message 7. Echo's 4096-byte bound is unchanged. No quantization is applied.
+
+WASD console and Unity setup: [movement integration guide](../integrations/Unity/README.md).
+
+
+### Client input conversion and focus
+
+Console and Unity use the shared `MovementInput.FromLocalAxes` helper. Local axes are validated, diagonal input is normalized, yaw rotation uses double precision, and final X/Z components are clamped to [-1, 1] to prevent floating-point rounding from creating invalid packets. Wire validation remains strict. Console WASD requires a standalone Windows Console Host window; the actual console HWND must be foreground, and hidden pseudoconsole hosts are rejected. The provided launcher opens a supported window. Unity sends after processing the current snapshot so an immediate send failure cannot invalidate a subsequent connection read in that frame.

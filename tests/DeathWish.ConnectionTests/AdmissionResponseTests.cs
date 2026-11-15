@@ -108,7 +108,7 @@ static class AdmissionResponseTests
             Require(room.World.PlayerCount == 1 && session.PendingFrames == 2, "Stalled write does not block tick");
             if (!timeout)
             {
-                for (int i = 2; i < ClientSession.MaxPendingFrames; i++) Require(session.Send(new byte[3]), "Queue within limit");
+                for (int i = 2; i < ClientSession.MAX_PENDING_FRAMES; i++) Require(session.Send(new byte[3]), "Queue within limit");
                 Require(!session.Send(new byte[3]), "Overflow rejected");
             }
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));

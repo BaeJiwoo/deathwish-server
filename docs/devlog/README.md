@@ -17,7 +17,7 @@
 
 | 날짜 | 주요 작업 |
 | --- | --- |
-| [2026-11-15](2026-11-15.md) | Stage 5 JoinAck, bounded output, Windows in-memory verification; TCP blocked |
+| [2026-11-15](2026-11-15.md) | Stages 5-7, Unity Canvas and third-person Game view with Play-mode sample checks, [server test guide](../Testing.md), live TCP pending |
 | [2026-11-14](2026-11-14.md) | Stage 3 틱 기반 월드 및 Stage 4 월드 입장·퇴장, Linux 빌드·TCP 검증 |
 | [2026-11-13](2026-11-13.md) | TCP 패킷, 세션 관리, 방 입장, MockClient, 환경변수 기반 서버 설정 |
 

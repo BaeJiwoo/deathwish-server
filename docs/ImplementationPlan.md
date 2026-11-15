@@ -107,7 +107,7 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 
 ## Stage 5 — Binary admission response
 
-- [ ] Implementation and review complete.
+- [x] Implementation and review complete.
 - Create `docs/Protocol.md` with frame length semantics, message IDs, byte order, maximum frame size, field layouts, and malformed-packet behavior.
 - Use DotNetty length framing and PacketCodec for JoinAck payloads.
 - Return PlayerId, ServerTick, and spawn position after world admission.
@@ -117,7 +117,7 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 - Review: A TCP test client decodes the exact documented bytes.
 - Review: Split frames, combined frames, and invalid lengths are handled correctly.
 
-- Status - Implemented; awaiting user review and real TCP runtime verification. Stage 5 remains unchecked.
+- Status - User authorized Stage 6 on 2026-11-15 after the Stage 5 review discussion. Review accepted; the real TCP verification limitation remains tracked below. Git history confirms cca8223 (feat: add world admission acknowledgements and bounded session output).
 - Implementation - JoinAck type 5 carries room ID, player ID, creation tick and unquantized spawn position. Creation emits one notification; duplicate room requests only repeat the reservation response. Session output ordering guarantees the initial reservation response precedes JoinAck.
 - Output - All reliable responses use one session FIFO, bounded to 64 frames/256 KiB including one in-flight write. Overflow, failed writes and a five-second write timeout close the connection. World ticks do not await socket completion. Production adds DotNetty.Codecs 0.7.6 length framing.
 - Client - MockClient receives asynchronous JoinAck alongside request responses; WaitForAdmissionAsync and /join expose the actual admission state. Malformed, duplicate, unsolicited and mismatched admission messages close the client.
@@ -133,6 +133,15 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 - Keep the latest movement state per player and stop stale input after a timeout.
 - Review: Packet frequency does not change movement speed; stale input stops movement.
 
+- Status - User authorized the WASD client and snapshot work on 2026-11-15. Stage 6 code review acceptance has not been explicitly recorded; it remains unchecked.
+- Protocol - MoveInput type 6 carries uint32 sequence and float32 X/Z direction. Codec rejects nonfinite/out-of-range components and wrong lengths. Session identity selects the admission; no client position or time is trusted. No input response is sent.
+- Simulation - 5 m/s maximum on XZ, clamping direction length to 1 while preserving smaller analog values. Join/Leave processing precedes one movement update per active player per tick. Updated PlayerState snapshots are copied and published by the world owner.
+- Input storage - One synchronized latest-input slot per admission replaces a movement command queue. Storage stays bounded by admission capacity; movement cannot crowd out Leave. Pending admissions retain receipt age; departed/closed slots reject input, and rejoin starts fresh.
+- Ordering and expiry - First sequence arbitrary, subsequent unchecked uint32 distance must be in (0, 2^31); duplicates/old/ambiguous input neither replace state nor refresh age. Monotonic receipt age >=250 ms stops movement without clearing sequence history. GameServer passes the same TimeProvider to the world loop and admission slots.
+- Client - SendMoveAsync after JoinAck sends without awaiting a reply and shares an operation guard with Echo/join. Interactive /move x z increments sequence and sends one sample; held-input refreshing is up to the caller.
+- Verification - Windows .NET 10.0.404 builds passed; deterministic/in-memory tests cover wire bytes, splits/combined frames, invalid floats and lengths, normalized/analog speed, packet-frequency independence, stop, exact expiry, wraparound, pending admission, delayed departure, rejoin, shutdown, sender isolation and concurrent input/tick processing. Real TCP movement assertions were added to RoomClientTests, but loopback connection remains denied (10013); full test runner exits 2 (SKIP). NuGet vulnerability metadata retrieval reports NU1900; no compile errors.
+- Remaining - Real TCP, Linux and Unity validation remain unverified. No physics, map limits, acceleration, transport input-rate limiter or runtime movement options. No position packets/broadcast until Stage 7. Constants touched in PacketCodec/GameWorld now use UPPER_SNAKE_CASE, with call sites updated.
+
 ## Stage 7 — World snapshots
 
 - [ ] Implementation and review complete.
@@ -141,6 +150,15 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 - Document snapshot field layouts and ordering after JoinAck in `docs/Protocol.md`.
 - Bound pending sends and coalesce snapshots that have not started transmission.
 - Review: Two TCP test clients decode matching membership and positions for the same server tick without blocking ticks.
+
+- Status - Implemented with explicit user authorization to extend through MockClient and Unity movement; awaiting review.
+- Server - Full type-7 room snapshots at 10 Hz simulation time (capped by tick rate), after lifecycle and movement; ordered player IDs, immutable shared encoding, reliable responses before first snapshot, one coalesced unsent snapshot per connection within existing output bounds.
+- Wire - Up to 1024 players require a snapshot-only maximum payload of 20,494 bytes. Existing request and Echo bounds remain unchanged. New clients must be deployed with this server.
+- Clients - Core exposes the latest immutable snapshot. Windows Console /wasd polls held keys at about 30 Hz and supports arrow-key yaw, focus-loss stop and position display. It requires a standalone Console Host window (launcher provided). Console and Unity share bounded rotated-input conversion. Unity's saved SyncTestScene uses a preplaced Canvas with Inspector-wired buttons and local server X/Y/Z. The Game view renders green local and cyan remote capsules at snapshot positions over a grid, with a third-person camera following the local player. Mouse X/Y orbits the camera and WASD uses camera yaw. Scene-view Gizmos still show exact positions and IDs. Departures remove visuals. Movement remains server-authoritative and uses no physics, interpolation or prediction.
+- Integration boundary - The original Unity project's opening/package errors were repaired and its previous movement screen was Play-mode verified. The new SyncTestScene revision is prepared under integrations/Unity, but remains unapplied to the original sibling project because it is outside the writable workspace. The installer backs up old auto-start scripts, adds the installed Unity 6 uGUI 2.0.0 package, and preserves scene customizations on reinstall. No review acceptance is inferred.
+- Scene verification - Unity API compile check passed with zero warnings/errors, including editor Gizmo code. Windows PowerShell 5.1 installer regression passed. In a disposable project opened with actual Unity 6000.3.11f1, scene import verified Canvas references, fonts and button wiring. Play-mode checks passed local coordinates, telemetry, remote departure and disconnect reset using synthetic snapshots; local/remote Gizmos and the Canvas were visually confirmed. Corrected Unity 6 LegacyRuntime font references to file ID 10102 after the initial import exposed invisible text. Live TCP movement, focus behavior, two-client synchronization and standalone builds remain unverified.
+- Verification - In-memory snapshot checks cover exact bytes, split/combined packets, maximum capacity, malformed state, room isolation, equal snapshots, departure, movement ordering, cadence and stalled-output coalescing. TCP equality assertions are added but environment connection denial still prevents execution. Added regression checks for rotated client input and Windows PowerShell 5.1 manifest repair/reinstallation. See today's development log for final build/test results. Follow [Testing.md](Testing.md) for the VS Code, Console and Unity manual review steps and expected results.
+
 
 ## Stage 8 — Position quantization
 
