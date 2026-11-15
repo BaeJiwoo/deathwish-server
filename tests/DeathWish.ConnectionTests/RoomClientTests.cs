@@ -55,6 +55,11 @@ static class RoomClientTests
             clock.Advance(TimeSpan.FromMilliseconds(100));
             await clock.NextDelayAsync();
             PlayerState[] players = room.World.GetPlayers();
+            JoinAck firstAck = await first.WaitForAdmissionAsync(deadline.Token);
+            JoinAck secondAck = await second.WaitForAdmissionAsync(deadline.Token);
+            if (firstAck.PlayerId == secondAck.PlayerId || firstAck.ServerTick != 1 || secondAck.ServerTick != 1 ||
+                firstAck.RoomId != 1 || firstAck.X != 0 || firstAck.Y != 0 || firstAck.Z != 0)
+                throw new Exception("TCP JoinAck does not match world admission");
             if (players.Length != 2 || players.Select(player => player.PlayerId).Distinct().Count() != 2 ||
                 !players.Select(player => player.SessionId).Order().SequenceEqual(room.GetMemberIds().Order()))
                 throw new Exception("TCP room admission did not create two distinct world players");

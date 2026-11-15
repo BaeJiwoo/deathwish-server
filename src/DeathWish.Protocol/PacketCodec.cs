@@ -10,7 +10,8 @@ public enum MessageType : byte
     EchoRequest = 1,
     EchoResponse = 2,
     JoinRoomRequest = 3,
-    JoinRoomResponse = 4
+    JoinRoomResponse = 4,
+    JoinAck = 5
 }
 
 public static class PacketCodec
@@ -77,6 +78,45 @@ public static class PacketCodec
         return new JoinRoomResponse(roomId, result);
     }
 
+    public static byte[] EncodeJoinAck(JoinAck ack)
+    {
+        ValidateJoinAck(ack);
+        byte[] frame = new byte[HeaderSize + 32];
+        frame[1] = 32;
+        frame[2] = (byte)MessageType.JoinAck;
+        Span<byte> payload = frame.AsSpan(HeaderSize);
+        BinaryPrimitives.WriteInt32BigEndian(payload, ack.RoomId);
+        BinaryPrimitives.WriteInt64BigEndian(payload.Slice(4), ack.PlayerId);
+        BinaryPrimitives.WriteInt64BigEndian(payload.Slice(12), ack.ServerTick);
+        BinaryPrimitives.WriteInt32BigEndian(payload.Slice(20), BitConverter.SingleToInt32Bits(ack.X));
+        BinaryPrimitives.WriteInt32BigEndian(payload.Slice(24), BitConverter.SingleToInt32Bits(ack.Y));
+        BinaryPrimitives.WriteInt32BigEndian(payload.Slice(28), BitConverter.SingleToInt32Bits(ack.Z));
+        return frame;
+    }
+
+    public static JoinAck DecodeJoinAck(byte[] payload)
+    {
+        ValidatePayloadLength(payload, 32);
+        var ack = new JoinAck(BinaryPrimitives.ReadInt32BigEndian(payload),
+            BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(4)),
+            BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(12)),
+            BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(20))),
+            BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(24))),
+            BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(28))));
+        ValidateJoinAck(ack);
+        return ack;
+    }
+
+    private static void ValidateJoinAck(JoinAck ack)
+    {
+        ValidateRoomId(ack.RoomId);
+        if (ack.PlayerId <= 0 || ack.ServerTick <= 0 ||
+            float.IsNaN(ack.X) || float.IsInfinity(ack.X) ||
+            float.IsNaN(ack.Y) || float.IsInfinity(ack.Y) ||
+            float.IsNaN(ack.Z) || float.IsInfinity(ack.Z))
+            throw new InvalidDataException("Invalid world admission state.");
+    }
+
     private static void ValidatePayloadLength(byte[] payload, int expected)
     {
         if (payload == null) throw new ArgumentNullException(nameof(payload));
@@ -99,7 +139,7 @@ public static class PacketCodec
     internal static void ValidateType(MessageType type)
     {
         if (type != MessageType.EchoRequest && type != MessageType.EchoResponse &&
-            type != MessageType.JoinRoomRequest && type != MessageType.JoinRoomResponse)
+            type != MessageType.JoinRoomRequest && type != MessageType.JoinRoomResponse && type != MessageType.JoinAck)
             throw new InvalidDataException("Unknown message type.");
     }
 }

@@ -50,30 +50,14 @@ public sealed class GameChannelHandler : SimpleChannelInboundHandler<IByteBuffer
                 break;
             case MessageType.JoinRoomRequest:
                 JoinRoomRequest request = PacketCodec.DecodeJoinRoomRequest(payload);
-                RoomJoinResult result = Session is null
-                    ? RoomJoinResult.SessionUnavailable
-                    : _rooms.Join(Session.SessionId, request.RoomId);
-                frame = PacketCodec.EncodeJoinRoomResponse(new JoinRoomResponse(request.RoomId, result));
-                break;
+                if (Session is null) throw new InvalidOperationException("Session is not active.");
+                Session.ReplyToJoin(_rooms, request.RoomId);
+                return;
             default:
                 throw new InvalidDataException("Server expects a request message.");
         }
 
-        _ = SendResponseAsync(context, Unpooled.WrappedBuffer(frame));
-    }
-
-    private static async Task SendResponseAsync(IChannelHandlerContext context, IByteBuffer response)
-    {
-        // Ownership of the response buffer transfers to the outbound pipeline.
-        try
-        {
-            await context.WriteAndFlushAsync(response);
-        }
-        catch (Exception exception)
-        {
-            Console.Error.WriteLine($"Response failed: {exception.Message}");
-            await context.CloseAsync();
-        }
+        Session?.Send(frame);
     }
 
     public override void ChannelInactive(IChannelHandlerContext context)

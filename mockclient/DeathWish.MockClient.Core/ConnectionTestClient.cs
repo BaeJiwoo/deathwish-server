@@ -20,6 +20,29 @@ public sealed class ConnectionTestClient : IDisposable
     private bool _connectStarted;
     private bool _connected;
     private Exception? _disconnectError;
+    private readonly TaskCompletionSource<JoinAck> _admission = new TaskCompletionSource<JoinAck>(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int? _acceptedRoom;
+    private int? _requestedRoom;
+
+    /// <summary>Waits for actual player creation. Cancellation permanently closes the connection.</summary>
+    public async Task<JoinAck> WaitForAdmissionAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_sync)
+        {
+            if (_acceptedRoom == null) throw new InvalidOperationException("Join a room successfully before waiting for admission.");
+        }
+        using (cancellationToken.Register(() => Close(new OperationCanceledException(cancellationToken))))
+        {
+            try
+            {
+                JoinAck ack = await _admission.Task.ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                return ack;
+            }
+            catch { cancellationToken.ThrowIfCancellationRequested(); throw; }
+        }
+    }
 
     /// <summary>Completes when the connection closes, including local disposal. Never faults.</summary>
     public Task Disconnected => _disconnected.Task;
@@ -97,6 +120,8 @@ public sealed class ConnectionTestClient : IDisposable
             if (!_connected) throw new InvalidOperationException("Connect before sending a request.");
             if (_pendingResponse != null) throw new InvalidOperationException("A request is already pending.");
             _expectedResponse = expectedResponse;
+            _requestedRoom = expectedResponse == MessageType.JoinRoomResponse
+                ? PacketCodec.DecodeJoinRoomRequest(payload.AsSpan(PacketCodec.HeaderSize).ToArray()).RoomId : (int?)null;
             _pendingResponse = response;
         }
 
@@ -147,6 +172,19 @@ public sealed class ConnectionTestClient : IDisposable
                 {
                     lock (_sync)
                     {
+                        if (type == MessageType.JoinAck)
+                        {
+                            JoinAck ack = PacketCodec.DecodeJoinAck(payload);
+                            if (_acceptedRoom != ack.RoomId || !_admission.TrySetResult(ack))
+                                throw new InvalidDataException("Unexpected world admission.");
+                            return;
+                        }
+                        if (_pendingResponse != null && type == _expectedResponse && type == MessageType.JoinRoomResponse)
+                        {
+                            JoinRoomResponse response = PacketCodec.DecodeJoinRoomResponse(payload);
+                            if (response.RoomId != _requestedRoom) throw new InvalidDataException("Room response does not match the request.");
+                            if (response.Result == RoomJoinResult.Success) _acceptedRoom = response.RoomId;
+                        }
                         if (_pendingResponse == null || type != _expectedResponse || !_pendingResponse.TrySetResult(payload))
                             throw new InvalidDataException("Unexpected response.");
                     }
@@ -167,6 +205,8 @@ public sealed class ConnectionTestClient : IDisposable
             _closed = true;
             _disconnectError = error;
             _pendingResponse?.TrySetException(error ?? new EndOfStreamException("Connection closed."));
+            _admission.TrySetException(error ?? new EndOfStreamException("Connection closed before admission."));
+            _ = _admission.Task.Exception;
             _client.Dispose();
             _disconnected.TrySetResult(true);
         }

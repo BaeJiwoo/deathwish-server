@@ -37,9 +37,9 @@ static void VerifyEcho(byte[] request, string expected, int split)
 }
 
 ServerOptionsTests.Run();
+await AdmissionResponseTests.RunAsync();
 await WorldLoopTests.RunAsync();
 await WorldAdmissionTests.RunAsync();
-await GameServerTests.RunAsync();
 var sessions = new SessionManager();
 var rooms = new RoomManager(sessions);
 var firstHandler = new GameChannelHandler(sessions, rooms);
@@ -182,6 +182,7 @@ catch (SocketException exception) when (exception.SocketErrorCode == SocketError
 try
 {
     int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+    await GameServerTests.RunAsync();
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
     using var client = new ConnectionTestClient();
     Task<TcpClient> accept = listener.AcceptTcpClientAsync();

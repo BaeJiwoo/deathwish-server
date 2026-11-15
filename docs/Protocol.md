@@ -20,6 +20,7 @@ Maximum payload length is 4096 bytes. A complete frame is 3 + N bytes. Zero-leng
 | 2 | EchoResponse | Server to client | Same text as request |
 | 3 | JoinRoomRequest | Client to server | RoomId: signed int32, big-endian |
 | 4 | JoinRoomResponse | Server to client | Requested RoomId: signed int32, big-endian; result: byte |
+| 5 | JoinAck | Server to client | RoomId, PlayerId, ServerTick, spawn X/Y/Z |
 
 Example request for `Hi`: `00 02 01 48 69`. Response: `00 02 02 48 69`.
 LF, CR, and NUL are valid payload characters. Unknown types, incorrect direction, invalid UTF-8, or oversized lengths close the connection. Oversized lengths are rejected after reading the header, before allocating the body. Incomplete frames at disconnect are discarded; the client reports truncated responses as errors.
@@ -61,7 +62,7 @@ Success acknowledges acceptance, not completion of a world update. The room rese
 and queues Join before responding. The world assigns PlayerId when a later tick processes Join.
 Repeated same-room requests do not reserve another slot or enqueue another Join. A disconnect
 before processing prevents admission or queues its cleanup; it does not require an acknowledgement.
-PlayerId, spawn position, and completion notification are not sent in Stage 4; Stage 5 adds JoinAck.
+After player creation, Stage 5 sends JoinAck as specified below.
 
 Room 1 request: `00 04 03 00 00 00 01`.
 Room 1 success: `00 05 04 00 00 00 01 00`.
@@ -83,14 +84,14 @@ the requested room ID even when admission fails. Sending an EchoResponse or Join
 the server is a direction error and closes the connection. Failed response writes also close the
 connection; ChannelInactive removes room membership before unregistering the session.
 Admission does not depend on acknowledgement delivery, so failure to deliver a successful response
-is resolved through that disconnect cleanup. Output queue limits remain deferred to the planned
-bounded-output work; this checkpoint does not provide slow-client backpressure.
+is resolved through that disconnect cleanup. All responses use the bounded output FIFO described below. This replaces the planned
+unbounded response path.
 
 ## Lifecycle
 
 Core continuously reads the socket. EOF completes `Disconnected`; reset and receive errors populate `DisconnectError`. Pending Echo and room requests fail on closure. The console waits for input and disconnection concurrently. No application shutdown packet is defined. Silent network loss while idle requires a future heartbeat policy.
 
-One request may be outstanding. The console applies five-second connect/request timeouts. Cancellation and I/O errors close the connection. Duplicate Connect, requests before connection, and overlapping requests are rejected. Echo content, response type, and the requested room ID are checked in Core. Malformed or mismatched responses close the connection. Valid admission failures return JoinRoomResponse normally and keep the connection usable. Invalid local room IDs fail validation without sending or closing the connection. The client does not cache room membership; a successful response describes admission when the server processed the request.
+One request may be outstanding. The console applies five-second connect/request timeouts. Cancellation and I/O errors close the connection. Duplicate Connect, requests before connection, and overlapping requests are rejected. Echo content, response type, and the requested room ID are checked in Core. Malformed or mismatched responses close the connection. Valid admission failures return JoinRoomResponse normally and keep the connection usable. Invalid local room IDs fail validation without sending or closing the connection. The client caches the accepted room and first JoinAck; a successful response describes admission when the server processed the request.
 
 ## Run
 
@@ -160,3 +161,44 @@ dotnet run --project tests/DeathWish.ConnectionTests
 ```
 
 Exit code 2 indicates socket checks were skipped due to environment permissions. In-memory checks execute first.
+
+## World admission completion (Stage 5)
+
+JoinAck (type 5) has exactly 32 payload bytes, 35 including the header. All integers and IEEE-754
+binary32 position bits use big-endian byte order. Invalid lengths, nonpositive IDs/ticks, and
+nonfinite coordinates are protocol errors. RoomId is positive int32; PlayerId and ServerTick are positive int64.
+
+| Payload offset | Size | Field |
+| --- | --- | --- |
+| 0 | 4 | RoomId |
+| 4 | 8 | PlayerId, unique within this world run |
+| 12 | 8 | ServerTick in which the player was created |
+| 20 | 4 | Spawn X, float32 |
+| 24 | 4 | Spawn Y, float32 |
+| 28 | 4 | Spawn Z, float32 |
+
+Positions use world units (one unit = one meter), +X right, +Y up, +Z forward. Initial spawn is
+(0, 0, 0). There is no quantization yet. Example for room 1, player 2, tick 3, position (1, -2, 0.5):
+`00 20 05 00 00 00 01 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 03 3F 80 00 00 C0 00 00 00 3F 00 00 00`.
+
+The first successful JoinRoomResponse is queued before JoinAck, even if the world ticks concurrently.
+Only creation emits JoinAck; repeated same-room joins return another JoinRoomResponse but no new JoinAck.
+Other reliable responses retain FIFO enqueue order and may appear between acceptance and completion.
+Departure before creation can suppress JoinAck. Disconnect after creation may prevent delivery;
+normal departure cleanup removes the player. A received JoinAck reports admission at its tick, not ongoing connectivity.
+No snapshot or broadcast is sent. Old clients reject type 5; deploy the updated protocol and client together.
+
+ClientSession owns a FIFO limited to 64 frames and 262144 bytes, including its one in-flight write.
+Overflow rejects the new frame, discards queued frames, and closes the connection. Each submitted write
+has a five-second deadline; failure or timeout also closes the connection. These are code defaults.
+The world never awaits socket completion. Queued managed arrays belong to the session; after wrapping and
+submission, DotNetty owns the reference-counted buffer, including failure/timeout cleanup. No reliable
+frame is coalesced. A short output lock orders admission acceptance with world notifications; socket
+completion is never awaited under it. The production pipeline uses LengthFieldBasedFrameDecoder with
+maximum length 4099, offset 0, field width 2, adjustment 1, and strip count 0, followed by PacketReader.
+
+MockClient receives JoinAck independently of request responses and caches the first admission.
+After successful JoinRoomAsync, call WaitForAdmissionAsync with a cancellation token. Duplicate,
+unsolicited, wrong-room, or malformed JoinAck closes the connection. Cancellation while waiting closes
+ the connection; disconnect fails an incomplete admission wait. The console's /join waits for completion
+and prints PlayerId, ServerTick, and spawn within the existing five-second command deadline.

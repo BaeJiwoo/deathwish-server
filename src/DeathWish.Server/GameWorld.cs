@@ -1,4 +1,5 @@
 using System.Numerics;
+using DeathWish.Protocol;
 
 namespace DeathWish.Server;
 
@@ -51,6 +52,7 @@ public sealed class GameWorld
                     _players.Add(admission, new PlayerState(playerId, admission.Session.SessionId, Vector3.Zero));
                     _lastPlayerId = playerId;
                     changed = true;
+                    admission.Session.Send(PacketCodec.EncodeJoinAck(new JoinAck(RoomId, playerId, completedTick, 0, 0, 0)));
                     break;
                 case WorldCommandType.Leave:
                     changed |= _players.Remove(admission);

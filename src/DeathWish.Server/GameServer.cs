@@ -1,4 +1,6 @@
 using System.Net;
+using DotNetty.Codecs;
+using DeathWish.Protocol;
 using System.Runtime.ExceptionServices;
 using DotNetty.Transport.Bootstrapping;
 using DotNetty.Transport.Channels;
@@ -51,6 +53,7 @@ public sealed class GameServer
                 .ChildHandler(new ActionChannelInitializer<IChannel>(channel =>
                 {
                     connections.Add(channel);
+                    channel.Pipeline.AddLast(new LengthFieldBasedFrameDecoder(PacketCodec.HeaderSize + PacketCodec.MaxPayloadLength, 0, 2, 1, 0));
                     channel.Pipeline.AddLast(new GameChannelHandler(sessions, rooms));
                 }));
 

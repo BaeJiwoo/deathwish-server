@@ -48,6 +48,10 @@ static class GameServerTests
             Require((await second.JoinRoomAsync(1, deadline.Token)).Result == RoomJoinResult.Success, "Second live room join");
             clock.Advance(TimeSpan.FromMilliseconds(100));
             await clock.NextDelayAsync();
+            JoinAck firstAck = await first.WaitForAdmissionAsync(deadline.Token);
+            JoinAck secondAck = await second.WaitForAdmissionAsync(deadline.Token);
+            Require(firstAck.PlayerId != secondAck.PlayerId && firstAck.ServerTick == 1 && secondAck.ServerTick == 1,
+                "Production pipeline delivers world admission");
             Require(await first.EchoAsync("world running", deadline.Token) == "world running", "Networking alongside world loop");
 
             if (injectFailure)

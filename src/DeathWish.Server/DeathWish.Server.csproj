@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="DotNetty.Transport" Version="0.7.6" />
+    <PackageReference Include="DotNetty.Codecs" Version="0.7.6" />
   </ItemGroup>
   <ItemGroup><ProjectReference Include="../DeathWish.Protocol/DeathWish.Protocol.csproj" /></ItemGroup>
   <ItemGroup><InternalsVisibleTo Include="DeathWish.ConnectionTests" /></ItemGroup>

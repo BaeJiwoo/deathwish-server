@@ -61,6 +61,11 @@ try
 
             JoinRoomResponse response = await client.JoinRoomAsync(roomId, timeout.Token);
             Console.WriteLine($"Join room {response.RoomId}: {response.Result}");
+            if (response.Result == RoomJoinResult.Success)
+            {
+                JoinAck ack = await client.WaitForAdmissionAsync(timeout.Token);
+                Console.WriteLine($"World ready: PlayerId={ack.PlayerId}, ServerTick={ack.ServerTick}, Spawn=({ack.X}, {ack.Y}, {ack.Z})");
+            }
             if (args.Length == 3 && response.Result != RoomJoinResult.Success) return 1;
         }
         else

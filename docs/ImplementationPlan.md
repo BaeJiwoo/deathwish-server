@@ -90,13 +90,13 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 
 ## Stage 4 — World admission and removal
 
-- [ ] Implementation and review complete.
+- [x] Implementation and review complete.
 - Add WorldCommand and PlayerState; only the world loop mutates player state.
 - Queue Join and Leave in connection order and assign PlayerId on admission.
 - Bound admission and per-tick command processing; guarantee departure cleanup.
 - Define queue overflow behavior so a full admission queue cannot discard departure cleanup. Ignore commands for departed sessions.
 - Review: Immediate disconnect, duplicate Leave, and shutdown leave no players behind.
-- Status — Implemented and verified on Linux; awaiting user code review. This stage remains unchecked.
+- Status - Implemented and verified on Linux; user explicitly authorized Stage 5 on 2026-11-15, accepting the Stage 4 review checkpoint. Git history confirms 0b49e0a (feat: add tick-based world admission and departure).
 - Design — [World admission and departure](WorldAdmissionDesign.md) defines bounded admission reservations, per-tick processing, player IDs, snapshots, and terminal cleanup.
 - Implementation — RoomManager serializes admission/leave with membership changes. Each accepted admission has a distinct token and reserves space for one Join and one Leave. Defaults are 1024 outstanding admissions and 128 processed commands per room per tick; queued commands are bounded by 2048. Capacity includes pending, active, and departing admissions until Leave is consumed. Full capacity returns WorldUnavailable without adding membership. Stale Join commands are skipped but consume processing budget; duplicate or old Leaves cannot remove a rejoined player.
 - Player state — GameWorld alone assigns increasing positive long PlayerIds within a world run and maintains immutable PlayerState values with SessionId and initial Vector3.Zero position. Public readers receive copied snapshots; room members and world players may temporarily differ while commands wait. No movement or physics is implemented.
@@ -116,6 +116,13 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 - Keep reliable responses ordered and bound pending output. Disconnect a session when it exceeds the defined output limit.
 - Review: A TCP test client decodes the exact documented bytes.
 - Review: Split frames, combined frames, and invalid lengths are handled correctly.
+
+- Status - Implemented; awaiting user review and real TCP runtime verification. Stage 5 remains unchecked.
+- Implementation - JoinAck type 5 carries room ID, player ID, creation tick and unquantized spawn position. Creation emits one notification; duplicate room requests only repeat the reservation response. Session output ordering guarantees the initial reservation response precedes JoinAck.
+- Output - All reliable responses use one session FIFO, bounded to 64 frames/256 KiB including one in-flight write. Overflow, failed writes and a five-second write timeout close the connection. World ticks do not await socket completion. Production adds DotNetty.Codecs 0.7.6 length framing.
+- Client - MockClient receives asynchronous JoinAck alongside request responses; WaitForAdmissionAsync and /join expose the actual admission state. Malformed, duplicate, unsolicited and mismatched admission messages close the client.
+- Verification on Windows - .NET 10.0.404 builds succeeded. ConnectionTests reported NU1900 warnings because NuGet vulnerability data was inaccessible; Console build had zero warnings/errors. In-memory checks passed for exact bytes, every split point, combined frames, malformed payloads, production length decoding, world ordering, duplicate join, output overflow, timeout and cleanup, plus existing regression checks. Full runner exited 2: real TCP connection denied with SocketException 10013. TCP assertions were added but are not claimed as passed.
+- Remaining - Run ConnectionTests and the Console /join command in an environment allowing loopback TCP; Unity, Linux Stage 5 validation and production load targets remain unverified. Output limits are code defaults; movement and snapshots remain Stages 6 and 7.
 
 ## Stage 6 — Server-authoritative movement
 
