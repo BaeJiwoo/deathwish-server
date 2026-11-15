@@ -9,10 +9,10 @@ public sealed class Room
     public GameWorld World { get; }
     public int MemberCount { get { lock (_sync) return _members.Count; } }
 
-    internal Room(int roomId, object sync)
+    internal Room(int roomId, object sync, int admissionCapacity, int maxCommandsPerTick)
     {
         RoomId = roomId;
-        World = new GameWorld(roomId);
+        World = new GameWorld(roomId, admissionCapacity, maxCommandsPerTick);
         _sync = sync;
     }
 

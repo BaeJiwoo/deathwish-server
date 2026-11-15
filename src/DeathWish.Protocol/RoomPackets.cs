@@ -5,7 +5,8 @@ public enum RoomJoinResult : byte
     Success = 0,
     SessionUnavailable = 1,
     RoomNotFound = 2,
-    AlreadyInAnotherRoom = 3
+    AlreadyInAnotherRoom = 3,
+    WorldUnavailable = 4
 }
 
 public readonly struct JoinRoomRequest

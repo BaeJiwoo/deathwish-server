@@ -68,9 +68,11 @@ public sealed class GameServer
         finally
         {
             // Observe the loop once, and attempt every cleanup even when an earlier operation fails.
+            rooms.StopAdmission();
             await CleanupAsync(() => loopCancellation.CancelAsync());
             if (listener is not null) await CleanupAsync(() => listener.CloseAsync());
             if (worldTask is not null) await CleanupAsync(() => worldTask);
+            else await CleanupAsync(() => worldLoop.RunAsync(new CancellationToken(true)));
             await CleanupAsync(() => connections.CloseAsync());
             await Task.WhenAll(
                 CleanupAsync(() => acceptGroup.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.FromSeconds(5))),

@@ -43,7 +43,7 @@ static class RoomProtocolTests
             Reject<InvalidDataException>(() => PacketCodec.DecodeJoinRoomRequest(payload[..4]));
             Reject<InvalidDataException>(() => PacketCodec.DecodeJoinRoomResponse(payload));
         }
-        foreach (byte result in new byte[] { 4, 255 })
+        foreach (byte result in new byte[] { 5, 255 })
         {
             Reject<InvalidDataException>(() => PacketCodec.EncodeJoinRoomResponse(new JoinRoomResponse(1, (RoomJoinResult)result)));
             Reject<InvalidDataException>(() => PacketCodec.DecodeJoinRoomResponse(new byte[] { 0, 0, 0, 1, result }));

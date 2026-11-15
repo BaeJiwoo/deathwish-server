@@ -24,9 +24,14 @@ static class RoomClientTests
         var connections = new DefaultChannelGroup(acceptGroup.GetNext());
         var sessions = new SessionManager();
         var rooms = new RoomManager(sessions);
+        var clock = new ManualTimeProvider();
+        using var worldCancellation = new CancellationTokenSource();
+        var worldLoop = new WorldLoop(rooms.GetWorlds(), 10, clock);
+        Task worldTask = worldLoop.RunAsync(worldCancellation.Token);
         IChannel? listener = null;
         try
         {
+            await clock.NextDelayAsync();
             listener = await new ServerBootstrap().Group(acceptGroup, workerGroup)
                 .Channel<TcpServerSocketChannel>()
                 .ChildHandler(new ActionChannelInitializer<IChannel>(channel =>
@@ -46,21 +51,34 @@ static class RoomClientTests
             await ExpectJoin(second, 1, RoomJoinResult.Success, deadline.Token);
             if (!rooms.TryGetRoom(1, out var room) || room.MemberCount != 2)
                 throw new Exception("TCP clients did not share room 1");
+            if (room.World.PlayerCount != 0) throw new Exception("TCP handler mutated world before tick");
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            await clock.NextDelayAsync();
+            PlayerState[] players = room.World.GetPlayers();
+            if (players.Length != 2 || players.Select(player => player.PlayerId).Distinct().Count() != 2 ||
+                !players.Select(player => player.SessionId).Order().SequenceEqual(room.GetMemberIds().Order()))
+                throw new Exception("TCP room admission did not create two distinct world players");
             if (await first.EchoAsync("after join", deadline.Token) != "after join")
                 throw new Exception("Echo after admission failed");
 
             await listener.CloseAsync();
             await connections.CloseAsync();
             await Task.WhenAll(first.Disconnected, second.Disconnected).WaitAsync(deadline.Token);
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            await clock.NextDelayAsync();
+            if (room.World.PlayerCount != 0 || room.World.Commands.AdmissionCount != 0)
+                throw new Exception("TCP departure left world players or reservations");
         }
         finally
         {
             if (listener is not null) await listener.CloseAsync();
             await connections.CloseAsync();
+            worldCancellation.Cancel();
+            await worldTask.WaitAsync(deadline.Token);
             await Task.WhenAll(acceptGroup.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.FromSeconds(2)),
                 workerGroup.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.FromSeconds(2)));
         }
-        if (sessions.Count != 0 || !rooms.TryGetRoom(1, out var emptied) || emptied.MemberCount != 0)
+        if (sessions.Count != 0 || !rooms.TryGetRoom(1, out var emptied) || emptied.MemberCount != 0 || emptied.World.PlayerCount != 0)
             throw new Exception("TCP shutdown left room members or sessions");
 
         await VerifyPeerResponses(deadline.Token);
@@ -76,6 +94,7 @@ static class RoomClientTests
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
             foreach (byte[] response in new[] {
                 PacketCodec.EncodeJoinRoomResponse(new JoinRoomResponse(1, RoomJoinResult.Success)),
+                PacketCodec.EncodeJoinRoomResponse(new JoinRoomResponse(1, RoomJoinResult.WorldUnavailable)),
                 PacketCodec.EncodeJoinRoomResponse(new JoinRoomResponse(2, RoomJoinResult.Success)),
                 PacketCodec.EncodeEcho(MessageType.EchoResponse, "wrong type"),
                 new byte[] { 0, 5, 4, 0, 0, 0, 1, 255 },
@@ -93,9 +112,11 @@ static class RoomClientTests
                 await Reject<InvalidOperationException>(() => client.JoinRoomAsync(2, token));
                 await peer.GetStream().WriteAsync(response.AsMemory(0, 2), token);
                 await peer.GetStream().WriteAsync(response.AsMemory(2), token);
-                if (response.SequenceEqual(new byte[] { 0, 5, 4, 0, 0, 0, 1, 0 }))
+                if (response.SequenceEqual(new byte[] { 0, 5, 4, 0, 0, 0, 1, 0 }) ||
+                    response.SequenceEqual(new byte[] { 0, 5, 4, 0, 0, 0, 1, 4 }))
                 {
-                    if ((await pending).Result != RoomJoinResult.Success) throw new Exception("Split response failed");
+                    if ((await pending).Result != (RoomJoinResult)response[^1]) throw new Exception("Split response failed");
+                    if (client.Disconnected.IsCompleted) throw new Exception("Valid result closed the client");
                 }
                 else
                 {

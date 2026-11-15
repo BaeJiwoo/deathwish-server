@@ -43,18 +43,30 @@ The request contains no SessionId; the server will identify the sender from its 
 
 | Result | Value | Meaning |
 | --- | --- | --- |
-| Success | 0 | Admitted, or already in the requested room |
+| Success | 0 | Room membership and world admission reservation accepted, or already in the requested room |
 | SessionUnavailable | 1 | Session is not registered or is disconnected |
 | RoomNotFound | 2 | Positive room ID does not identify an existing room |
 | AlreadyInAnotherRoom | 3 | Admission refused; existing membership is retained |
+| WorldUnavailable | 4 | World admission capacity is exhausted, or server/world shutdown has begun |
 
 The result code conveys success or failure; there is no separate boolean or free-text reason.
 SessionUnavailable does not guarantee that an already closed connection can receive a response.
 These explicit byte values are shared by server and client; do not renumber them.
+Value 4 is added in Stage 4 without changing frame layouts or values 0 through 3. Older codecs
+reject this new result as unknown; rebuild/deploy the shared protocol with both endpoints.
+WorldUnavailable leaves the connection open and creates no room membership or player for a new
+request. The client may retry after capacity becomes available; no retry interval is specified.
+
+Success acknowledges acceptance, not completion of a world update. The room reserves capacity
+and queues Join before responding. The world assigns PlayerId when a later tick processes Join.
+Repeated same-room requests do not reserve another slot or enqueue another Join. A disconnect
+before processing prevents admission or queues its cleanup; it does not require an acknowledgement.
+PlayerId, spawn position, and completion notification are not sent in Stage 4; Stage 5 adds JoinAck.
 
 Room 1 request: `00 04 03 00 00 00 01`.
 Room 1 success: `00 05 04 00 00 00 01 00`.
 Room 99 not found: `00 05 04 00 00 00 63 02`.
+Room 1 world unavailable: `00 05 04 00 00 00 01 04`.
 
 Encoders return complete frames; decoders accept payloads only. Both validate room IDs and result codes.
 Wrong payload lengths, nonpositive room IDs, and unknown result bytes throw InvalidDataException;
@@ -109,8 +121,11 @@ positive int32 values. Code defaults are 127.0.0.1, 7777, 2 rooms, and 30 Hz. Op
 at startup. Actual timing depends on scheduler resolution and workload; a positive tick rate is
 not a performance guarantee. The loop runs at most four catch-up ticks before discarding excess
 backlog. Start and shutdown logs report the configured rate and loop statistics respectively.
-World ticks currently advance counters only; admission still manages room membership without
-creating a simulated player. No wire formats or client messages change in this stage.
+World ticks now process queued admission/departure and maintain player identity and initial
+position. Each room allows at most 1024 outstanding admissions (pending, active, or waiting for
+removal), and processes at most 128 world commands per tick. Each admission reserves its own
+Leave command, so full admission capacity cannot drop cleanup. These are code defaults rather
+than environment options. The complete ordering and shutdown contract is in [WorldAdmissionDesign.md](WorldAdmissionDesign.md).
 The minimal `.env` reader supports KEY=VALUE, blank lines, full-line # comments, whitespace,
 single/double-quoted literal values, and trailing # comments (unquoted comments require preceding
 whitespace). Duplicate keys use the last value. Keys are case-sensitive in the file; unrelated

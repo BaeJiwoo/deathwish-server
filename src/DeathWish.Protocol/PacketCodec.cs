@@ -91,7 +91,8 @@ public static class PacketCodec
     private static void ValidateRoomJoinResult(RoomJoinResult result)
     {
         if (result != RoomJoinResult.Success && result != RoomJoinResult.SessionUnavailable &&
-            result != RoomJoinResult.RoomNotFound && result != RoomJoinResult.AlreadyInAnotherRoom)
+            result != RoomJoinResult.RoomNotFound && result != RoomJoinResult.AlreadyInAnotherRoom &&
+            result != RoomJoinResult.WorldUnavailable)
             throw new InvalidDataException("Unknown room join result.");
     }
 

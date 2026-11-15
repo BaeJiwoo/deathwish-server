@@ -164,6 +164,7 @@ static class WorldLoopTests
         var world = new GameWorld(1);
         await new WorldLoop(new[] { world }, 30).RunAsync(cancellation.Token);
         Require(world.CurrentTick == 0, "Pre-cancellation performs no work");
+        world = new GameWorld(1);
 
         var clock = new ManualTimeProvider();
         var other = new GameWorld(2);

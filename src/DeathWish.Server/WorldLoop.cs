@@ -39,6 +39,16 @@ internal sealed class WorldLoop
     {
         if (Interlocked.Exchange(ref _started, 1) != 0)
             throw new InvalidOperationException("A world loop can only run once.");
+
+        try { await RunCoreAsync(cancellationToken).ConfigureAwait(false); }
+        finally
+        {
+            foreach (GameWorld world in _worlds) world.Shutdown();
+        }
+    }
+
+    private async Task RunCoreAsync(CancellationToken cancellationToken)
+    {
         if (cancellationToken.IsCancellationRequested) return;
 
         long origin = _timeProvider.GetTimestamp();

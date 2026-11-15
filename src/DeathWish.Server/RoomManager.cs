@@ -8,9 +8,13 @@ public sealed class RoomManager
     private readonly object _sync = new();
     private readonly SessionManager _sessions;
     private readonly Dictionary<int, Room> _rooms;
-    private readonly Dictionary<Guid, Room> _membership = new();
+    private readonly Dictionary<Guid, Membership> _membership = new();
+    private bool _accepting = true;
 
     public RoomManager(SessionManager sessions, int roomCount = ServerOptions.DefaultRoomCount)
+        : this(sessions, roomCount, GameWorld.DefaultAdmissionCapacity, GameWorld.DefaultMaxCommandsPerTick) { }
+
+    internal RoomManager(SessionManager sessions, int roomCount, int admissionCapacity, int maxCommandsPerTick)
     {
         ArgumentNullException.ThrowIfNull(sessions);
         if (roomCount < 1) throw new ArgumentOutOfRangeException(nameof(roomCount));
@@ -20,7 +24,7 @@ public sealed class RoomManager
         for (int index = 0; index < roomCount; index++)
         {
             int roomId = index + 1;
-            _rooms.Add(roomId, new Room(roomId, _sync));
+            _rooms.Add(roomId, new Room(roomId, _sync, admissionCapacity, maxCommandsPerTick));
         }
     }
 
@@ -32,7 +36,7 @@ public sealed class RoomManager
 
     public int? GetRoomId(Guid sessionId)
     {
-        lock (_sync) return _membership.TryGetValue(sessionId, out var room) ? room.RoomId : null;
+        lock (_sync) return _membership.TryGetValue(sessionId, out var membership) ? membership.Room.RoomId : null;
     }
 
     public RoomJoinResult Join(Guid sessionId, int roomId)
@@ -42,13 +46,17 @@ public sealed class RoomManager
         {
             if (!_sessions.TryGetSession(sessionId, out var session) || session.IsDisconnected)
                 return RoomJoinResult.SessionUnavailable;
+            if (!_accepting) return RoomJoinResult.WorldUnavailable;
             if (!_rooms.TryGetValue(roomId, out var room))
                 return RoomJoinResult.RoomNotFound;
-            if (_membership.TryGetValue(sessionId, out var currentRoom))
-                return currentRoom == room ? RoomJoinResult.Success : RoomJoinResult.AlreadyInAnotherRoom;
+            if (!room.World.Commands.IsAccepting) return RoomJoinResult.WorldUnavailable;
+            if (_membership.TryGetValue(sessionId, out var membership))
+                return membership.Room == room ? RoomJoinResult.Success : RoomJoinResult.AlreadyInAnotherRoom;
+            if (!room.World.Commands.TryEnqueueJoin(session, out var admission))
+                return RoomJoinResult.WorldUnavailable;
 
             room.Add(sessionId);
-            _membership.Add(sessionId, room);
+            _membership.Add(sessionId, new Membership(room, admission));
             return RoomJoinResult.Success;
         }
     }
@@ -57,10 +65,18 @@ public sealed class RoomManager
     {
         lock (_sync)
         {
-            if (!_membership.Remove(sessionId, out var room)) return false;
+            if (!_membership.Remove(sessionId, out var membership)) return false;
 
-            room.Remove(sessionId);
+            membership.Room.World.Commands.EnqueueLeave(membership.Admission);
+            membership.Room.Remove(sessionId);
             return true;
         }
     }
+
+    internal void StopAdmission()
+    {
+        lock (_sync) _accepting = false;
+    }
+
+    private sealed record Membership(Room Room, WorldAdmission Admission);
 }

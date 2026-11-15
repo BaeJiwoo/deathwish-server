@@ -74,9 +74,9 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 
 ## Stage 3 — Fixed tick execution
 
-- [ ] Implementation and review complete.
+- [x] Implementation and review complete.
 - Design specification — [World tick class specification](WorldTickDesign.md) defines per-room GameWorld, shared WorldLoop, statistics, configurable SERVER_TICK_RATE, lifecycle, and review criteria.
-- Status — Implemented and verified on Linux; awaiting user code review. The completion checkbox remains unchecked until acceptance.
+- Status — Implemented and verified on Linux. The user finished code review with no requested changes and explicitly authorized Stage 4; Stage 3 review is accepted. Git history confirms commit ffea8e3 (`feat: add configurable fixed-tick world loop`).
 - Add WorldLoop and GameWorld.Tick with an initial rate of 30 Hz.
 - Use monotonic elapsed time and a fixed simulation delta.
 - Bound catch-up work and record tick overruns.
@@ -96,6 +96,14 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 - Bound admission and per-tick command processing; guarantee departure cleanup.
 - Define queue overflow behavior so a full admission queue cannot discard departure cleanup. Ignore commands for departed sessions.
 - Review: Immediate disconnect, duplicate Leave, and shutdown leave no players behind.
+- Status — Implemented and verified on Linux; awaiting user code review. This stage remains unchecked.
+- Design — [World admission and departure](WorldAdmissionDesign.md) defines bounded admission reservations, per-tick processing, player IDs, snapshots, and terminal cleanup.
+- Implementation — RoomManager serializes admission/leave with membership changes. Each accepted admission has a distinct token and reserves space for one Join and one Leave. Defaults are 1024 outstanding admissions and 128 processed commands per room per tick; queued commands are bounded by 2048. Capacity includes pending, active, and departing admissions until Leave is consumed. Full capacity returns WorldUnavailable without adding membership. Stale Join commands are skipped but consume processing budget; duplicate or old Leaves cannot remove a rejoined player.
+- Player state — GameWorld alone assigns increasing positive long PlayerIds within a world run and maintains immutable PlayerState values with SessionId and initial Vector3.Zero position. Public readers receive copied snapshots; room members and world players may temporarily differ while commands wait. No movement or physics is implemented.
+- Protocol — JoinRoomResponse adds WorldUnavailable=4; values 0–3 and layouts are unchanged. Success means reservation accepted, not player creation completed. Older codecs reject value 4 and must be updated. JoinAck with PlayerId/tick/spawn remains Stage 5.
+- Shutdown — WorldLoop finally closes every world command queue and clears players/reservations on cancellation, pre-cancellation, and failure. Shutdown cleanup is terminal, outside the per-tick budget, and runs on the world owner. Later channel departure callbacks become harmless no-ops for closed queues. GameServer stops admission and also finalizes worlds if binding failed before loop startup.
+- Verified on Linux — ConnectionTests and MockClient.Console builds passed with zero warnings/errors using .NET 10.0.404. The full test executable exited 0. Checks cover deferred creation, duplicate admission, snapshot isolation, same-session rejoin ordering, active/pending capacity, full-queue departures, stale joins, old departure tokens, 32 concurrent join/tick/disconnect races, pre-cancelled/normal/failing loop cleanup, and stopped-world rejection. Real TCP tests assert two distinct players after ticking and zero players/reservations after departure. Protocol tests round-trip result 4 and reject unknown values; MockClient accepts WorldUnavailable without disconnecting. Existing tick, server lifecycle, session, room, and Echo tests passed.
+- Remaining limitations — Capacity/budget are code defaults, not runtime options. A slow world still delays other rooms. Terminal cleanup is bounded by admitted capacity but does not enforce the ordinary per-tick budget. Stage 5 notification, production load targets, Windows, and Unity integration remain pending.
 
 ## Stage 5 — Binary admission response
 
