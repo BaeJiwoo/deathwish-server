@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <UnityEditorRoot Condition="'$(UnityEditorRoot)' == ''">C:/Program Files/Unity/Hub/Editor/6000.3.11f1/Editor</UnityEditorRoot>
+    <UnityUiAssembly Condition="'$(UnityUiAssembly)' == ''">$(UnityEditorRoot)/Data/Resources/PackageManager/ProjectTemplates/libcache/com.unity.template.3d-cross-platform-17.0.14/ScriptAssemblies/UnityEngine.UI.dll</UnityUiAssembly>
+    <DefineConstants>$(DefineConstants);UNITY_EDITOR</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../integrations/Unity/SyncTestClient.cs" />
+    <ProjectReference Include="../../mockclient/DeathWish.MockClient.Core/DeathWish.MockClient.Core.csproj" />
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.CoreModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.IMGUIModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.InputLegacyModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.UI"><HintPath>$(UnityUiAssembly)</HintPath></Reference>
+    <Reference Include="UnityEngine.UIModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.UIModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.TextRenderingModule.dll</HintPath></Reference>
+    <Reference Include="UnityEditor.CoreModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEditor.CoreModule.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>
