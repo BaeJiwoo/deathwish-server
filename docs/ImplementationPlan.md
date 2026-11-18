@@ -169,6 +169,16 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 - Verification - In-memory snapshot checks cover exact bytes, split/combined packets, maximum capacity, malformed state, room isolation, equal snapshots, departure, movement ordering, cadence and stalled-output coalescing. TCP equality assertions are added but environment connection denial still prevents execution. Added regression checks for rotated client input and Windows PowerShell 5.1 manifest repair/reinstallation. See today's development log for final build/test results. Follow [Testing.md](Testing.md) for the VS Code, Console and Unity manual review steps and expected results.
 
 
+## Player gravity and floor collision (issue #2)
+
+Review each commit before starting the next unit.
+
+1. Gravity integration and server configuration — implemented, awaiting review. Configure the downward acceleration magnitude with `SERVER_GRAVITY_METERS_PER_SECOND_SQUARED` (default 9.81, finite and nonnegative). Store vertical velocity per player and advance height with the updated velocity.
+2. Define a player box with a foot origin and a finite horizontal plane.
+3. Place a 10 m × 10 m plane at each world's origin.
+4. Resolve falling box contact at the plane crossing, including partial overlap, fast falls and edge departure.
+5. Integrate movement and gravity for every active player between lifecycle processing and snapshot publication. Verify spawning, idle fall, stable landing and authoritative snapshot height.
+
 ## Stage 8 — Position quantization
 
 - [ ] Implementation and review complete.

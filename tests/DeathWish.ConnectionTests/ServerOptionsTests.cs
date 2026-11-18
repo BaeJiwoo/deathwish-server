@@ -4,13 +4,26 @@ static class ServerOptionsTests
 {
     public static void Run()
     {
-        string[] keys = { "SERVER_ADDRESS", "SERVER_PORT", "SERVER_ROOM_COUNT", "SERVER_TICK_RATE" };
+        const string GRAVITY_KEY = "SERVER_GRAVITY_METERS_PER_SECOND_SQUARED";
+        string[] keys = { "SERVER_ADDRESS", "SERVER_PORT", "SERVER_ROOM_COUNT", "SERVER_TICK_RATE", GRAVITY_KEY };
         var previous = keys.ToDictionary(key => key, Environment.GetEnvironmentVariable);
         string path = Path.Combine(Path.GetTempPath(), $"deathwish-options-{Guid.NewGuid():N}.env");
         try
         {
             foreach (string key in keys) Environment.SetEnvironmentVariable(key, null);
             ServerOptions defaults = ServerOptionsLoader.Load(Array.Empty<string>(), path);
+            Require(defaults.GravityMetersPerSecondSquared == 9.81f, "Default gravity magnitude");
+            File.WriteAllText(path, $"{GRAVITY_KEY}=1.25");
+            Require(ServerOptionsLoader.Load([], path).GravityMetersPerSecondSquared == 1.25f, "Gravity from file");
+            Environment.SetEnvironmentVariable(GRAVITY_KEY, "0");
+            Require(ServerOptionsLoader.Load([], path).GravityMetersPerSecondSquared == 0, "Environment can disable gravity");
+            Environment.SetEnvironmentVariable(GRAVITY_KEY, null);
+            foreach (string invalidGravity in new[] { "-1", "NaN", "Infinity", "1e100", "invalid" })
+            {
+                File.WriteAllText(path, $"{GRAVITY_KEY}={invalidGravity}");
+                Reject<ArgumentException>(() => ServerOptionsLoader.Load([], path));
+            }
+
             Require(defaults.RoomCount == ServerOptions.DefaultRoomCount && defaults.Port == ServerOptions.DefaultPort && defaults.TickRate == 30, "Missing file defaults");
             File.WriteAllText(path, "# Test settings\nSERVER_ADDRESS='127.0.0.2'\nSERVER_PORT = 8000 # port\nSERVER_ROOM_COUNT=4\nSERVER_ROOM_COUNT=5\nSERVER_TICK_RATE=60\n");
             ServerOptions file = ServerOptionsLoader.Load(Array.Empty<string>(), path);
