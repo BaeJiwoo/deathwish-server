@@ -1,4 +1,6 @@
 using System.Numerics;
+using BepuPhysics;
+using BepuPhysics.Collidables;
 
 namespace DeathWish.Server.Physics;
 
@@ -21,4 +23,9 @@ internal sealed class BoxCollider : Collider
         SizeMeters = sizeMeters;
     }
 
+    internal override void RegisterStatic(Simulation simulation)
+    {
+        TypedIndex shape = simulation.Shapes.Add(new Box(SizeMeters.X, SizeMeters.Y, SizeMeters.Z));
+        simulation.Statics.Add(new StaticDescription(CenterWorldPositionMeters, Quaternion.Identity, shape));
+    }
 }

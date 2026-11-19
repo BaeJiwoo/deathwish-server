@@ -5,13 +5,26 @@ static class ServerOptionsTests
     public static void Run()
     {
         const string GRAVITY_KEY = "SERVER_GRAVITY_METERS_PER_SECOND_SQUARED";
-        string[] keys = { "SERVER_ADDRESS", "SERVER_PORT", "SERVER_ROOM_COUNT", "SERVER_TICK_RATE", GRAVITY_KEY };
+        const string MAP_ROOM_KEY = "SERVER_PHYSICS_LAB_ROOM_ID";
+        string[] keys = { MAP_ROOM_KEY, "SERVER_ADDRESS", "SERVER_PORT", "SERVER_ROOM_COUNT", "SERVER_TICK_RATE", GRAVITY_KEY };
         var previous = keys.ToDictionary(key => key, Environment.GetEnvironmentVariable);
         string path = Path.Combine(Path.GetTempPath(), $"deathwish-options-{Guid.NewGuid():N}.env");
         try
         {
             foreach (string key in keys) Environment.SetEnvironmentVariable(key, null);
             ServerOptions defaults = ServerOptionsLoader.Load(Array.Empty<string>(), path);
+            Require(defaults.PhysicsLabRoomId is null, "Default map selection keeps flat rooms");
+            File.WriteAllText(path, $"{MAP_ROOM_KEY}=2");
+            Require(ServerOptionsLoader.Load([], path).PhysicsLabRoomId == 2, "Select PhysicsLab room from file");
+            Environment.SetEnvironmentVariable(MAP_ROOM_KEY, "1");
+            Require(ServerOptionsLoader.Load([], path).PhysicsLabRoomId == 1, "Environment overrides selected room");
+            Environment.SetEnvironmentVariable(MAP_ROOM_KEY, null);
+            foreach (string invalidRoom in new[] { "0", "3", "abc" })
+            {
+                File.WriteAllText(path, $"{MAP_ROOM_KEY}={invalidRoom}");
+                Reject<ArgumentException>(() => ServerOptionsLoader.Load([], path));
+            }
+
             Require(defaults.GravityMetersPerSecondSquared == 9.81f, "Default gravity magnitude");
             File.WriteAllText(path, $"{GRAVITY_KEY}=1.25");
             Require(ServerOptionsLoader.Load([], path).GravityMetersPerSecondSquared == 1.25f, "Gravity from file");

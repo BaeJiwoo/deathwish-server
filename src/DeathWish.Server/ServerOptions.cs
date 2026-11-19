@@ -13,12 +13,13 @@ public sealed class ServerOptions
     public string Address { get; }
     public int Port { get; }
     public int RoomCount { get; }
+    public int? PhysicsLabRoomId { get; }
     public int TickRate { get; }
     public float GravityMetersPerSecondSquared { get; }
 
     public ServerOptions(string address = DefaultAddress, int port = DefaultPort,
         int roomCount = DefaultRoomCount, int tickRate = DefaultTickRate,
-        float gravityMetersPerSecondSquared = DEFAULT_GRAVITY_METERS_PER_SECOND_SQUARED)
+        float gravityMetersPerSecondSquared = DEFAULT_GRAVITY_METERS_PER_SECOND_SQUARED, int? physicsLabRoomId = null)
     {
         if (!IPAddress.TryParse(address, out _)) throw new ArgumentException("Expected an IP address.", nameof(address));
         if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
@@ -30,6 +31,12 @@ public sealed class ServerOptions
             throw new ArgumentOutOfRangeException(nameof(gravityMetersPerSecondSquared));
         }
 
+        if (physicsLabRoomId is < 1 || physicsLabRoomId > roomCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(physicsLabRoomId), "PhysicsLab room ID must refer to a configured room.");
+        }
+
+        PhysicsLabRoomId = physicsLabRoomId;
         Address = address;
         Port = port;
         RoomCount = roomCount;

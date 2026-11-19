@@ -1,4 +1,6 @@
 using System.Numerics;
+using BepuPhysics;
+using BepuPhysics.Collidables;
 
 namespace DeathWish.Server.Physics;
 
@@ -24,5 +26,20 @@ internal sealed class PlaneCollider : Collider
 
         WidthMeters = widthMeters;
         DepthMeters = depthMeters;
+    }
+
+    internal override void RegisterStatic(Simulation simulation)
+    {
+        var half = HalfSizeMeters;
+        var a = new Vector3(-half.X, 0, -half.Z);
+        var b = new Vector3(half.X, 0, -half.Z);
+        var c = new Vector3(half.X, 0, half.Z);
+        var d = new Vector3(-half.X, 0, half.Z);
+
+        // Bepu's clockwise triangle winding exposes the top face of the floor.
+        TypedIndex first = simulation.Shapes.Add(new Triangle(a, b, c));
+        TypedIndex second = simulation.Shapes.Add(new Triangle(a, c, d));
+        simulation.Statics.Add(new StaticDescription(CenterWorldPositionMeters, Quaternion.Identity, first));
+        simulation.Statics.Add(new StaticDescription(CenterWorldPositionMeters, Quaternion.Identity, second));
     }
 }

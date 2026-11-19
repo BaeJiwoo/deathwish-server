@@ -1,4 +1,5 @@
 using System.Numerics;
+using BepuPhysics;
 
 namespace DeathWish.Server.Physics;
 
@@ -7,6 +8,9 @@ internal abstract class Collider
     public Vector3 CenterWorldPositionMeters { get; private set; }
 
     protected abstract Vector3 HalfSizeMeters { get; }
+
+    /// <summary>Copies this placement into the owning Bepu simulation as static geometry during world setup.</summary>
+    internal abstract void RegisterStatic(Simulation simulation);
 
     protected Collider(Vector3 centerWorldPositionMeters)
     {

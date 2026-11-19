@@ -1,23 +1,32 @@
 using System.Numerics;
 using DeathWish.Server;
-using DeathWish.Server.Physics;
 
 internal static class GravityTests
 {
     internal static void Run()
     {
-        var player = new PlayerState(1, Guid.NewGuid(), new Vector3(2, 10, 3));
-        PlayerState first = Gravity.Apply(player, 8, 0.25f);
-        PlayerState second = Gravity.Apply(first, 8, 0.25f);
-        PlayerState coasting = Gravity.Apply(second, 0, 0.25f);
+        var rooms = new RoomManager(new SessionManager(), 1, 1, 1, gravityMetersPerSecondSquared: 8);
+        using var physics = rooms.GetWorlds().Single().CreatePhysicsSimulation();
+        var player = physics.AddPlayer(new Vector3(2, 10, 3));
+        physics.Step(0.25f);
+        var first = physics.GetMotion(player);
+        physics.Step(0.25f);
+        var second = physics.GetMotion(player);
 
-        if (first != (player with { Position = new Vector3(2, 9.5f, 3), VerticalVelocityMetersPerSecond = -2 }) ||
-            second != (player with { Position = new Vector3(2, 8.5f, 3), VerticalVelocityMetersPerSecond = -4 }) ||
-            coasting != (second with { Position = new Vector3(2, 7.5f, 3) }))
+        using var weightless = new GameWorld(2, gravityMetersPerSecondSquared: 0).CreatePhysicsSimulation();
+        var drifting = weightless.AddPlayer(second.FootPositionMeters, second.VerticalVelocityMetersPerSecond);
+        weightless.Step(0.25f);
+        var coasting = weightless.GetMotion(drifting);
+        const float POSITION_TOLERANCE_METERS = 0.00001f;
+        if (Vector3.Distance(first.FootPositionMeters, new Vector3(2, 9.5f, 3)) > POSITION_TOLERANCE_METERS ||
+            Vector3.Distance(second.FootPositionMeters, new Vector3(2, 8.5f, 3)) > POSITION_TOLERANCE_METERS ||
+            Vector3.Distance(coasting.FootPositionMeters, new Vector3(2, 7.5f, 3)) > POSITION_TOLERANCE_METERS ||
+            first.VerticalVelocityMetersPerSecond != -2 || second.VerticalVelocityMetersPerSecond != -4 ||
+            coasting.VerticalVelocityMetersPerSecond != -4)
         {
-            throw new Exception("Expected velocity-first free fall and constant velocity at zero gravity.");
+            throw new Exception($"Unexpected free fall or coasting. First {first}, second {second}, coasting {coasting}.");
         }
 
-        Console.WriteLine("PASS gravity updates vertical velocity before height and preserves horizontal position");
+        Console.WriteLine("PASS configured room gravity and coasting at zero gravity through Bepu");
     }
 }

@@ -39,6 +39,8 @@ static void VerifyEcho(byte[] request, string expected, int split)
 ServerOptionsTests.Run();
 GravityTests.Run();
 PrimitiveTests.Run();
+BepuMovementTests.Run();
+PhysicsLabTests.Run();
 MovementInputTests.Run();
 await SnapshotTests.RunAsync();
 await MovementTests.RunAsync();

@@ -240,7 +240,9 @@ static class MovementTests
         Require(fixture.Send(new MoveInput(1000, 0, 0)), "Newest stop accepted after concurrent writes");
         Vector3 position = fixture.Position;
         fixture.World.Tick(DELTA_SECONDS);
-        Near(fixture.Position, position, "No torn or queued movement after stop");
+        Vector3 stopped = fixture.Position;
+        Require(MathF.Abs(stopped.X - position.X) < POSITION_TOLERANCE && MathF.Abs(stopped.Z - position.Z) < POSITION_TOLERANCE,
+            "No torn or queued horizontal movement after stop");
         Require(fixture.World.Commands.PendingCount == 0, "Concurrent movement does not queue work");
     }
 

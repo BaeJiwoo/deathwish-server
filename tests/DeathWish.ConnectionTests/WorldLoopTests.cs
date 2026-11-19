@@ -52,9 +52,9 @@ static class WorldLoopTests
                 throw new Exception("Each new room must start with exactly one floor plane.");
             }
 
-            Require(floor.CenterWorldPositionMeters == Vector3.Zero && floor.WidthMeters == 10 && floor.DepthMeters == 10,
-                "Floor is centered at the origin and measures 10 m on both axes");
-            Require(floor.GetBounds() == (new Vector3(-5, 0, -5), new Vector3(5, 0, 5)), "Floor world bounds");
+            Require(floor.CenterWorldPositionMeters == Vector3.Zero && floor.WidthMeters == 100 && floor.DepthMeters == 100,
+                "Floor is centered at the origin and measures 100 m on both axes");
+            Require(floor.GetBounds() == (new Vector3(-50, 0, -50), new Vector3(50, 0, 50)), "Floor world bounds");
         }
 
         Require(worlds.Select(world => world.Colliders).Distinct().Count() == worlds.Length, "Independent collider lists");

@@ -226,8 +226,8 @@ Review each unit before committing it and starting the next unit.
 
 ## PhysicsLab test map (issue #3)
 
-1. Extract the shared static triangle map from Blender — implemented, awaiting review. See [coordinate contract, reproduction and geometry checks](../maps/PhysicsLab/README.md).
-2. Register the selectable map as static Bepu geometry; verify spawn and contacts.
+1. Extract the shared static triangle map from Blender — approved and committed (3345fca). See [coordinate contract, reproduction and geometry checks](../maps/PhysicsLab/README.md).
+2. Register the selectable map as static Bepu geometry — implemented, awaiting review. SERVER_PHYSICS_LAB_ROOM_ID selects one room; all others keep the flat floor. Spawn, floor, platform opening, ring passage and rim contact passed with server player bodies.
 3. Exercise the ramp, platform opening, walls and ring with the server player body.
 4. Render the same geometry in Unity with the Motion Lab appearance.
 5. Verify the route with two clients and run the existing flat-map regression suite.
