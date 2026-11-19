@@ -31,13 +31,13 @@ Open **Assets/DeathWishMovement/Scenes/SyncTestScene.unity** before entering Pla
 
 1. In Game view, set host/port/room and click **Connect and join**.
 2. Read **My server position (m)**, Player ID, Tick and Players on the Canvas. Before admission, position is `--`.
-3. The Game view shows the local green capsule and remote cyan capsules over a grid. The camera follows the local capsule from behind.
+3. The Game view shows the blue local capsule and yellow remote capsules in a white motion lab. The camera follows the local capsule from behind.
 4. Click **Capture input** in Game view. Mouse X/Y orbits the camera, and WASD moves relative to its horizontal heading. Esc or focus loss releases input and stops movement.
 5. Enable **Gizmos** in Scene view to see ID and coordinate labels for the same snapshot. Positions are displayed directly from the latest server snapshot, without interpolation or prediction.
 
 Add the scene to your build profile if building a standalone client. Scene-view Gizmos are editor-only.
 
-For a two-player check, join room 1 from Unity and Console, move Console away from the common spawn, and look for the cyan capsule in Game view. Pan with the mouse if needed. Disconnect Console and verify that the capsule disappears and Players drops. See [the server test guide](../../docs/Testing.md) for the full sequence.
+For a two-player check, join room 1 from Unity and Console, move Console away from the common spawn, and look for the yellow capsule in Game view. Pan with the mouse if needed. Disconnect Console and verify that the capsule disappears and Players drops. See [the server test guide](../../docs/Testing.md) for the full sequence.
 
 ## Project will not open: manifest repair
 

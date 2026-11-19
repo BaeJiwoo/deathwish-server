@@ -23,6 +23,10 @@ namespace DeathWish.Client
         private const float CAMERA_HEIGHT_METERS = 1.5f;
         private const float CAMERA_SIDE_OFFSET_METERS = 1.4f;
         private const float FLOOR_SIZE_METERS = 100f;
+        private const float LAB_WALL_OFFSET_METERS = 54f;
+        private const float LAB_WALL_HEIGHT_METERS = 12f;
+        private static readonly Color LocalAccent = new Color32(18, 78, 218, 255);
+        private static readonly Color RemoteAccent = new Color32(255, 196, 24, 255);
         private const int TIMEOUT_SECONDS = 5;
         private const int MAX_PORT = 65535;
 
@@ -43,6 +47,7 @@ namespace DeathWish.Client
         private Transform _viewCamera;
         private Mesh _playerMesh;
         private Material _floorMaterial;
+        private Material _wallMaterial;
         private Material _localMaterial;
         private Material _remoteMaterial;
         private ConnectionTestClient _client;
@@ -262,14 +267,28 @@ namespace DeathWish.Client
 
         private void CreateWorldView(Shader shader, Mesh floorMesh)
         {
-            _floorMaterial = new Material(shader) { color = new Color(0.11f, 0.15f, 0.21f) };
+            _floorMaterial = new Material(shader) { color = new Color32(227, 235, 238, 255) };
             _floorMaterial.SetFloat("_Grid", 1f);
-            _localMaterial = new Material(shader) { color = new Color(0.32f, 0.95f, 0.48f) };
-            _remoteMaterial = new Material(shader) { color = new Color(0.27f, 0.76f, 1f) };
+            _floorMaterial.SetFloat("_FloorHalfSize", FLOOR_SIZE_METERS / 2);
+            _localMaterial = new Material(shader) { color = LocalAccent };
+            _remoteMaterial = new Material(shader) { color = RemoteAccent };
 
             Vector3 meshSize = floorMesh.bounds.size;
             var floorScale = new Vector3(FLOOR_SIZE_METERS / meshSize.x, 1f, FLOOR_SIZE_METERS / meshSize.z);
             CreateVisual("Grid floor", floorMesh, transform, Vector3.down * 0.02f, floorScale, _floorMaterial);
+
+            Mesh panel = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
+            _wallMaterial = new Material(shader);
+            _wallMaterial.SetFloat("_Wall", 1f);
+            float span = 2 * LAB_WALL_OFFSET_METERS;
+            float height = LAB_WALL_HEIGHT_METERS;
+            foreach (float side in new[] { -LAB_WALL_OFFSET_METERS, LAB_WALL_OFFSET_METERS })
+            {
+                CreateVisual("Observation wall", panel, transform, new Vector3(0, height / 2, side),
+                    new Vector3(span, height, 0.4f), _wallMaterial);
+                CreateVisual("Observation wall", panel, transform, new Vector3(side, height / 2, 0),
+                    new Vector3(0.4f, height, span), _wallMaterial);
+            }
         }
 
         private void LateUpdate()
@@ -355,7 +374,7 @@ namespace DeathWish.Client
 
         private void RefreshView()
         {
-            if (!_isConfigured)
+            if (!_isConfigured || !isActiveAndEnabled)
             {
                 return;
             }
@@ -373,7 +392,7 @@ namespace DeathWish.Client
 
         private void RefreshTelemetry()
         {
-            if (!_isConfigured)
+            if (!_isConfigured || !isActiveAndEnabled)
             {
                 return;
             }
@@ -399,7 +418,7 @@ namespace DeathWish.Client
             foreach (var player in _positions)
             {
                 bool isLocalPlayer = player.Key == _playerId;
-                Gizmos.color = isLocalPlayer ? Color.green : Color.cyan;
+                Gizmos.color = isLocalPlayer ? LocalAccent : RemoteAccent;
                 Gizmos.DrawWireSphere(player.Value, GIZMO_RADIUS_METERS);
                 Gizmos.DrawLine(player.Value - Vector3.right * GIZMO_RADIUS_METERS, player.Value + Vector3.right * GIZMO_RADIUS_METERS);
                 Gizmos.DrawLine(player.Value - Vector3.forward * GIZMO_RADIUS_METERS, player.Value + Vector3.forward * GIZMO_RADIUS_METERS);
@@ -428,6 +447,11 @@ namespace DeathWish.Client
             RefreshTelemetry();
         }
 
+        private void OnEnable()
+        {
+            RefreshView();
+        }
+
         private void OnDisable()
         {
             Disconnect();
@@ -436,6 +460,7 @@ namespace DeathWish.Client
         private void OnDestroy()
         {
             Destroy(_floorMaterial);
+            Destroy(_wallMaterial);
             Destroy(_localMaterial);
             Destroy(_remoteMaterial);
         }
