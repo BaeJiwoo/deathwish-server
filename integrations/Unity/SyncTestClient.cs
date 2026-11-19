@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using DeathWish.MockClient.Core;
@@ -23,6 +26,11 @@ namespace DeathWish.Client
         private const float CAMERA_HEIGHT_METERS = 1.5f;
         private const float CAMERA_SIDE_OFFSET_METERS = 1.4f;
         private const float FLOOR_SIZE_METERS = 100f;
+        private const float LAB_WALL_OFFSET_METERS = 54f;
+        private const float LAB_WALL_HEIGHT_METERS = 12f;
+        private static readonly Color LocalAccent = new Color32(18, 78, 218, 255);
+        private static readonly Color RemoteAccent = new Color32(255, 196, 24, 255);
+        private const double SNAPSHOT_BLEND_SECONDS = 0.1;
         private const int TIMEOUT_SECONDS = 5;
         private const int MAX_PORT = 65535;
 
@@ -38,16 +46,23 @@ namespace DeathWish.Client
         [SerializeField] private Text _inputText = null;
 
         private readonly Dictionary<long, Vector3> _positions = new Dictionary<long, Vector3>();
+        private readonly Dictionary<long, Vector3> _blendStarts = new Dictionary<long, Vector3>();
+        private double _blendStartSeconds;
+        private bool _hasSnapshot;
         private readonly Dictionary<long, Transform> _markers = new Dictionary<long, Transform>();
         private readonly List<long> _departedPlayers = new List<long>();
         private Transform _viewCamera;
+        private GameObject _flatMap;
+        private GameObject _physicsLab;
+        private readonly List<Mesh> _labMeshes = new List<Mesh>();
         private Mesh _playerMesh;
         private Material _floorMaterial;
+        private Material _wallMaterial;
         private Material _localMaterial;
         private Material _remoteMaterial;
         private ConnectionTestClient _client;
         private CancellationTokenSource _cancellation;
-        private string _status = "Disconnected";
+        private string _status = "PhysicsLab preview | Disconnected";
         private long _playerId;
         private long _lastTick;
         private uint _sequence;
@@ -80,6 +95,7 @@ namespace DeathWish.Client
             {
                 _viewCamera = sceneCamera.transform;
                 CreateWorldView(shader, floorMesh);
+                SelectMap(true);
             }
             else
             {
@@ -138,10 +154,11 @@ namespace DeathWish.Client
                         return;
                     }
 
+                    SelectMap(ack.IsPhysicsLab);
                     _playerId = ack.PlayerId;
                     _lastTick = ack.ServerTick;
                     _positions[_playerId] = new Vector3(ack.X, ack.Y, ack.Z);
-                    _status = "Connected. Capture input for WASD and mouse look.";
+                    _status = ack.IsPhysicsLab ? "Connected | PhysicsLab" : "Connected | Flat map";
                 }
             }
             catch (Exception error)
@@ -195,9 +212,9 @@ namespace DeathWish.Client
             }
 
             WorldSnapshot snapshot = _client.LatestSnapshot;
-            if (snapshot != null && snapshot.ServerTick != _lastTick)
+            if (snapshot != null && (!_hasSnapshot || snapshot.ServerTick > _lastTick))
             {
-                ApplySnapshot(snapshot);
+                ApplySnapshot(snapshot, Time.unscaledTimeAsDouble);
             }
             RefreshTelemetry();
 
@@ -250,9 +267,17 @@ namespace DeathWish.Client
             }
         }
 
-        private void ApplySnapshot(WorldSnapshot snapshot)
+        private void ApplySnapshot(WorldSnapshot snapshot, double nowSeconds)
         {
+            // If a target arrives early, continue from the current blend to keep the path continuous.
+            float fraction = BlendFraction(nowSeconds);
+            foreach (var player in _positions)
+            {
+                _blendStarts[player.Key] = DisplayPosition(player.Key, player.Value, fraction);
+            }
             _lastTick = snapshot.ServerTick;
+            _hasSnapshot = true;
+            _blendStartSeconds = nowSeconds;
             _positions.Clear();
             foreach (SnapshotPlayer player in snapshot.Players)
             {
@@ -260,19 +285,112 @@ namespace DeathWish.Client
             }
         }
 
+        private float BlendFraction(double nowSeconds)
+        {
+            return Mathf.Clamp01((float)((nowSeconds - _blendStartSeconds) / SNAPSHOT_BLEND_SECONDS));
+        }
+
+        private Vector3 DisplayPosition(long id, Vector3 target, float fraction)
+        {
+            return _blendStarts.TryGetValue(id, out Vector3 start) ? Vector3.Lerp(start, target, fraction) : target;
+        }
+
         private void CreateWorldView(Shader shader, Mesh floorMesh)
         {
-            _floorMaterial = new Material(shader) { color = new Color(0.11f, 0.15f, 0.21f) };
+            _floorMaterial = new Material(shader) { color = new Color32(227, 235, 238, 255) };
             _floorMaterial.SetFloat("_Grid", 1f);
-            _localMaterial = new Material(shader) { color = new Color(0.32f, 0.95f, 0.48f) };
-            _remoteMaterial = new Material(shader) { color = new Color(0.27f, 0.76f, 1f) };
+            _floorMaterial.SetFloat("_FloorHalfSize", FLOOR_SIZE_METERS / 2);
+            _localMaterial = new Material(shader) { color = LocalAccent };
+            _remoteMaterial = new Material(shader) { color = RemoteAccent };
 
+            _flatMap = new GameObject("Flat map");
+            _flatMap.transform.SetParent(transform, false);
             Vector3 meshSize = floorMesh.bounds.size;
             var floorScale = new Vector3(FLOOR_SIZE_METERS / meshSize.x, 1f, FLOOR_SIZE_METERS / meshSize.z);
-            CreateVisual("Grid floor", floorMesh, transform, Vector3.down * 0.02f, floorScale, _floorMaterial);
+            CreateVisual("Grid floor", floorMesh, _flatMap.transform, Vector3.zero, floorScale, _floorMaterial);
+
+            Mesh panel = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
+            _wallMaterial = new Material(shader);
+            _wallMaterial.SetFloat("_Wall", 1f);
+            float span = 2 * LAB_WALL_OFFSET_METERS;
+            float height = LAB_WALL_HEIGHT_METERS;
+            foreach (float side in new[] { -LAB_WALL_OFFSET_METERS, LAB_WALL_OFFSET_METERS })
+            {
+                CreateVisual("Observation wall", panel, _flatMap.transform, new Vector3(0, height / 2, side),
+                    new Vector3(span, height, 0.4f), _wallMaterial);
+                CreateVisual("Observation wall", panel, _flatMap.transform, new Vector3(side, height / 2, 0),
+                    new Vector3(0.4f, height, span), _wallMaterial);
+            }
+        }
+
+        [DataContract]
+        private sealed class LabData
+        {
+            [DataMember(Name = "objects", IsRequired = true)] public LabObject[] Objects { get; set; }
+        }
+
+        [DataContract]
+        private sealed class LabObject
+        {
+            [DataMember(Name = "name", IsRequired = true)] public string Name { get; set; }
+            [DataMember(Name = "vertices", IsRequired = true)] public float[][] Vertices { get; set; }
+            [DataMember(Name = "triangles", IsRequired = true)] public int[][] Triangles { get; set; }
+        }
+
+        private void SelectMap(bool isPhysicsLab)
+        {
+            if (_flatMap == null)
+            {
+                return;
+            }
+            if (isPhysicsLab && _physicsLab == null)
+            {
+                TextAsset asset = Resources.Load<TextAsset>("PhysicsLab");
+                if (asset == null)
+                {
+                    throw new InvalidOperationException("Missing PhysicsLab map asset.");
+                }
+                using (var stream = new MemoryStream(asset.bytes))
+                {
+                    var data = (LabData)new DataContractJsonSerializer(typeof(LabData)).ReadObject(stream);
+                    _physicsLab = new GameObject("PhysicsLab");
+                    _physicsLab.transform.SetParent(transform, false);
+                    foreach (LabObject part in data.Objects)
+                    {
+                        var mesh = new Mesh { name = part.Name };
+                        _labMeshes.Add(mesh);
+                        mesh.vertices = Array.ConvertAll(part.Vertices, xyz => new Vector3(xyz[0], xyz[1], xyz[2]));
+                        var indices = new int[part.Triangles.Length * 3];
+                        for (int i = 0; i < part.Triangles.Length; i++)
+                        {
+                            // The export defines the front normal as AC x AB. Unity draws AB x AC.
+                            int[] triangle = part.Triangles[i];
+                            int offset = i * 3;
+                            indices[offset] = triangle[0];
+                            indices[offset + 1] = triangle[2];
+                            indices[offset + 2] = triangle[1];
+                        }
+                        mesh.triangles = indices;
+                        mesh.RecalculateNormals();
+                        mesh.RecalculateBounds();
+                        Material material = part.Name == "Torus" ? _remoteMaterial : _floorMaterial;
+                        CreateVisual(part.Name, mesh, _physicsLab.transform, Vector3.zero, Vector3.one, material);
+                    }
+                }
+            }
+            _flatMap.SetActive(!isPhysicsLab);
+            if (_physicsLab != null)
+            {
+                _physicsLab.SetActive(isPhysicsLab);
+            }
         }
 
         private void LateUpdate()
+        {
+            RenderWorld(Time.unscaledTimeAsDouble);
+        }
+
+        private void RenderWorld(double nowSeconds)
         {
             if (_viewCamera == null)
             {
@@ -291,8 +409,10 @@ namespace DeathWish.Client
             foreach (long playerId in _departedPlayers)
             {
                 _markers.Remove(playerId);
+                _blendStarts.Remove(playerId);
             }
 
+            float fraction = BlendFraction(nowSeconds);
             foreach (var player in _positions)
             {
                 bool isLocalPlayer = player.Key == _playerId;
@@ -305,14 +425,21 @@ namespace DeathWish.Client
                     _markers.Add(player.Key, marker);
                 }
 
-                marker.position = player.Value;
+                marker.position = DisplayPosition(player.Key, player.Value, fraction);
                 if (isLocalPlayer)
                 {
                     marker.rotation = Quaternion.Euler(0f, _yawDegrees, 0f);
                 }
             }
 
-            _positions.TryGetValue(_playerId, out Vector3 position);
+            if (_playerId == 0)
+            {
+                var overview = new Vector3(15f, 32f, 22f);
+                var target = new Vector3(-5f, 2f, -5f);
+                _viewCamera.SetPositionAndRotation(overview, Quaternion.LookRotation(target - overview));
+                return;
+            }
+            Vector3 position = _markers.TryGetValue(_playerId, out Transform localMarker) ? localMarker.position : Vector3.zero;
             Quaternion yaw = Quaternion.Euler(0f, _yawDegrees, 0f);
             Quaternion orbit = Quaternion.Euler(_pitchDegrees, _yawDegrees, 0f);
             Vector3 pivot = position + Vector3.up * CAMERA_HEIGHT_METERS;
@@ -355,7 +482,7 @@ namespace DeathWish.Client
 
         private void RefreshView()
         {
-            if (!_isConfigured)
+            if (!_isConfigured || !isActiveAndEnabled)
             {
                 return;
             }
@@ -373,7 +500,7 @@ namespace DeathWish.Client
 
         private void RefreshTelemetry()
         {
-            if (!_isConfigured)
+            if (!_isConfigured || !isActiveAndEnabled)
             {
                 return;
             }
@@ -399,7 +526,7 @@ namespace DeathWish.Client
             foreach (var player in _positions)
             {
                 bool isLocalPlayer = player.Key == _playerId;
-                Gizmos.color = isLocalPlayer ? Color.green : Color.cyan;
+                Gizmos.color = isLocalPlayer ? LocalAccent : RemoteAccent;
                 Gizmos.DrawWireSphere(player.Value, GIZMO_RADIUS_METERS);
                 Gizmos.DrawLine(player.Value - Vector3.right * GIZMO_RADIUS_METERS, player.Value + Vector3.right * GIZMO_RADIUS_METERS);
                 Gizmos.DrawLine(player.Value - Vector3.forward * GIZMO_RADIUS_METERS, player.Value + Vector3.forward * GIZMO_RADIUS_METERS);
@@ -428,6 +555,11 @@ namespace DeathWish.Client
             RefreshTelemetry();
         }
 
+        private void OnEnable()
+        {
+            RefreshView();
+        }
+
         private void OnDisable()
         {
             Disconnect();
@@ -435,7 +567,12 @@ namespace DeathWish.Client
 
         private void OnDestroy()
         {
+            foreach (Mesh mesh in _labMeshes)
+            {
+                Destroy(mesh);
+            }
             Destroy(_floorMaterial);
+            Destroy(_wallMaterial);
             Destroy(_localMaterial);
             Destroy(_remoteMaterial);
         }
@@ -443,6 +580,10 @@ namespace DeathWish.Client
         /// <summary>Cancels the active connection and clears snapshot markers on Unity's main thread.</summary>
         public void Disconnect()
         {
+            if (_physicsLab != null)
+            {
+                SelectMap(true);
+            }
             ++_generation;
             CancellationTokenSource cancellation = _cancellation;
             ConnectionTestClient client = _client;
@@ -452,10 +593,12 @@ namespace DeathWish.Client
             _isSending = false;
             _playerId = 0;
             _lastTick = 0;
+            _hasSnapshot = false;
             _sequence = 0;
             _yawDegrees = 0;
             _pitchDegrees = DEFAULT_PITCH_DEGREES;
             _positions.Clear();
+            _blendStarts.Clear();
             foreach (Transform marker in _markers.Values)
             {
                 RemoveMarker(marker);
@@ -465,7 +608,7 @@ namespace DeathWish.Client
             client?.Dispose();
             cancellation?.Dispose();
             ReleaseInput();
-            _status = "Disconnected";
+            _status = "PhysicsLab preview | Disconnected";
             RefreshView();
         }
 

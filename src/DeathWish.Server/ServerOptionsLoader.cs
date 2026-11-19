@@ -27,7 +27,14 @@ public static class ServerOptionsLoader
         if (!int.TryParse(tickText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int tickRate) || tickRate < 1)
             throw new ArgumentException("SERVER_TICK_RATE must be a positive integer.");
 
-        return new ServerOptions(address, port, roomCount, tickRate);
+        string gravityText = Resolve("SERVER_GRAVITY_METERS_PER_SECOND_SQUARED",
+            ServerOptions.DEFAULT_GRAVITY_METERS_PER_SECOND_SQUARED.ToString(CultureInfo.InvariantCulture));
+        if (!float.TryParse(gravityText, NumberStyles.Float, CultureInfo.InvariantCulture, out float gravityMetersPerSecondSquared))
+        {
+            throw new ArgumentException("SERVER_GRAVITY_METERS_PER_SECOND_SQUARED must be a nonnegative finite number.");
+        }
+
+        return new ServerOptions(address, port, roomCount, tickRate, gravityMetersPerSecondSquared);
     }
 
     private static Dictionary<string, string> ReadFile(string path)

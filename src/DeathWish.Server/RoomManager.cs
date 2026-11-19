@@ -15,7 +15,7 @@ public sealed class RoomManager
         : this(sessions, roomCount, GameWorld.DEFAULT_ADMISSION_CAPACITY, GameWorld.DEFAULT_MAX_COMMANDS_PER_TICK) { }
 
     internal RoomManager(SessionManager sessions, int roomCount, int admissionCapacity, int maxCommandsPerTick,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null, float gravityMetersPerSecondSquared = ServerOptions.DEFAULT_GRAVITY_METERS_PER_SECOND_SQUARED)
     {
         ArgumentNullException.ThrowIfNull(sessions);
         if (roomCount < 1) throw new ArgumentOutOfRangeException(nameof(roomCount));
@@ -25,7 +25,7 @@ public sealed class RoomManager
         for (int index = 0; index < roomCount; index++)
         {
             int roomId = index + 1;
-            _rooms.Add(roomId, new Room(roomId, _sync, admissionCapacity, maxCommandsPerTick, timeProvider));
+            _rooms.Add(roomId, new Room(roomId, _sync, admissionCapacity, maxCommandsPerTick, timeProvider, gravityMetersPerSecondSquared, roomId == roomCount));
         }
     }
 

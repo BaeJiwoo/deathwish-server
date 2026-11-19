@@ -21,10 +21,11 @@
 
 ## 서버 실행
 
-.NET 10 SDK가 필요합니다. 기본 주소는 `127.0.0.1:7777`이며, IP 주소와 포트를 인자로 지정할 수 있습니다.
+.NET 10 SDK가 필요합니다. 기본 주소는 `127.0.0.1:7777`이며, 아래 로컬 PhysicsLab 예제에서는 서버, Unity, MockClient 모두 `127.0.0.1:17779`를 사용합니다. 저장소 루트에서 실행하세요.
 
 ```powershell
-dotnet run --project src/DeathWish.Server -- 127.0.0.1 7777
+$env:SERVER_ROOM_COUNT = '2'
+dotnet run --project src/DeathWish.Server -- 127.0.0.1 17779
 ```
 
 `.env` 또는 프로세스 환경변수에 `SERVER_TICK_RATE=60`을 설정하면 서버 재시작 후 모든 방의 목표 틱 레이트가 60Hz로 바뀝니다. 기본값은 30Hz이며, 자세한 설정은 [실행 문서](docs/Protocol.md#run)를 참조합니다.
@@ -43,10 +44,27 @@ Stage 7 snapshots and WASD clients are implemented and awaiting review. Unity's 
 - **매치메이킹:** 플레이어의 매치 참가 요청부터 게임 서버 입장까지 이어지는 시스템 구현
 - **플레이 데이터 수집 및 추적:** 게임 플레이 기록을 수집하고, 향후 데이터 분석 파이프라인으로 확장
 
-## WASD movement test
+## Unity와 MockClient로 같은 방에 접속하기
 
-Manual steps, expected results and troubleshooting: [서버 테스트 가이드](docs/Testing.md).
+위 서버가 실행 중이면 저장소 루트에서 **두 번째 PowerShell 창**을 열고 다음 명령을 실행합니다.
 
-Console `/join 1` → `/wasd`; Unity setup and manual verification: [movement guide](integrations/Unity/README.md).
+```powershell
+.\mockclient\Start-MockClient.ps1 -Port 17779
+```
 
-Unity opening error `Char: 65279`: rerun `integrations/Unity/Install.ps1` with Unity closed; it repairs the UTF-8 BOM and updates the client. Console WASD now requires a standalone Console Host window; use `mockclient/Start-MockClient.ps1` instead of a VS Code/Windows Terminal tab.
+새로 열린 MockClient 콘솔에 아래 두 줄을 차례로 입력합니다.
+
+```text
+/join 2
+/wasd
+```
+
+Unity에서는 `SyncTestScene`을 열고 **Play**를 누른 뒤 다음 값으로 **Connect**를 누릅니다.
+
+| Host | Port | Room |
+| --- | --- | --- |
+| `127.0.0.1` | `17779` | `2` |
+
+두 클라이언트가 접속하면 Unity에 **Players: 2**가 표시됩니다. MockClient 창에서 WASD로 움직이면 Unity에서 상대 캐릭터의 움직임을 볼 수 있습니다. PhysicsLab은 가장 높은 번호의 방이므로 방 개수를 바꿨다면 양쪽에서 해당 번호로 입장하세요.
+
+추가 실행 방법과 문제 해결은 [서버 테스트 가이드](docs/Testing.md)와 [Unity 연동 가이드](integrations/Unity/README.md)를 참고하세요. Unity에서 `Char: 65279` 오류가 발생하면 에디터를 닫고 `integrations/Unity/Install.ps1`을 다시 실행하세요.

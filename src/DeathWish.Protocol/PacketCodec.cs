@@ -18,6 +18,8 @@ public enum MessageType : byte
 
 public static class PacketCodec
 {
+    private const int JOIN_ACK_BASE_SIZE = 32;
+    private const byte PHYSICS_LAB_MAP_ID = 1;
     private const int MOVE_INPUT_PAYLOAD_SIZE = 12;
     private const int MOVE_SEQUENCE_OFFSET = 0;
     private const int MOVE_X_OFFSET = 4;
@@ -110,8 +112,13 @@ public static class PacketCodec
     public static byte[] EncodeJoinAck(JoinAck ack)
     {
         ValidateJoinAck(ack);
-        byte[] frame = new byte[HEADER_SIZE + 32];
-        frame[1] = 32;
+        int payloadSize = ack.IsPhysicsLab ? JOIN_ACK_BASE_SIZE + 1 : JOIN_ACK_BASE_SIZE;
+        byte[] frame = new byte[HEADER_SIZE + payloadSize];
+        frame[1] = (byte)payloadSize;
+        if (ack.IsPhysicsLab)
+        {
+            frame[HEADER_SIZE + JOIN_ACK_BASE_SIZE] = PHYSICS_LAB_MAP_ID;
+        }
         frame[2] = (byte)MessageType.JoinAck;
         Span<byte> payload = frame.AsSpan(HEADER_SIZE);
         BinaryPrimitives.WriteInt32BigEndian(payload, ack.RoomId);
@@ -125,13 +132,18 @@ public static class PacketCodec
 
     public static JoinAck DecodeJoinAck(byte[] payload)
     {
-        ValidatePayloadLength(payload, 32);
+        if (payload == null)
+        {
+            throw new ArgumentNullException(nameof(payload));
+        }
+        bool isPhysicsLab = payload.Length == JOIN_ACK_BASE_SIZE + 1 && payload[JOIN_ACK_BASE_SIZE] == PHYSICS_LAB_MAP_ID;
+        ValidatePayloadLength(payload, isPhysicsLab ? JOIN_ACK_BASE_SIZE + 1 : JOIN_ACK_BASE_SIZE);
         var ack = new JoinAck(BinaryPrimitives.ReadInt32BigEndian(payload),
             BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(4)),
             BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(12)),
             BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(20))),
             BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(24))),
-            BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(28))));
+            BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(28))), isPhysicsLab);
         ValidateJoinAck(ack);
         return ack;
     }

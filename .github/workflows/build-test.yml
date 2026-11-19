@@ -1,0 +1,26 @@
+name: Build and test
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  server-and-client:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build server
+        run: dotnet build src/DeathWish.Server -c Release
+      - name: Build console client
+        run: dotnet build mockclient/DeathWish.MockClient.Console -c Release
+      - name: Run connection and physics regressions
+        run: dotnet run --project tests/DeathWish.ConnectionTests -c Release
+      - name: Verify PhysicsLab geometry
+        run: python tools/physics_lab/verify_map.py maps/PhysicsLab/PhysicsLab.json

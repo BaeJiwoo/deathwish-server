@@ -166,7 +166,7 @@ Exit code 2 indicates socket checks were skipped due to environment permissions.
 
 ## World admission completion (Stage 5)
 
-JoinAck (type 5) has exactly 32 payload bytes, 35 including the header. All integers and IEEE-754
+JoinAck (type 5) has a 32-byte base payload. A flat room sends only the base payload. A PhysicsLab room appends one byte with value 1 at offset 32. Any other extension is invalid. Clients restricted to the original 32-byte format require an update to join PhysicsLab. All integers and IEEE-754
 binary32 position bits use big-endian byte order. Invalid lengths, nonpositive IDs/ticks, and
 nonfinite coordinates are protocol errors. RoomId is positive int32; PlayerId and ServerTick are positive int64.
 
@@ -179,8 +179,7 @@ nonfinite coordinates are protocol errors. RoomId is positive int32; PlayerId an
 | 24 | 4 | Spawn Y, float32 |
 | 28 | 4 | Spawn Z, float32 |
 
-Positions use world units (one unit = one meter), +X right, +Y up, +Z forward. Initial spawn is
-(0, 0, 0). There is no quantization yet. Example for room 1, player 2, tick 3, position (1, -2, 0.5):
+Positions use world units (one unit = one meter), +X right, +Y up, +Z forward. The server chooses an available spawn near the origin and sends its foot position in JoinAck. There is no quantization yet. Example for room 1, player 2, tick 3, position (1, -2, 0.5):
 `00 20 05 00 00 00 01 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 03 3F 80 00 00 C0 00 00 00 3F 00 00 00`.
 
 The first successful JoinRoomResponse is queued before JoinAck, even if the world ticks concurrently.
@@ -229,12 +228,12 @@ MAX_PAYLOAD_LENGTH replace their former PascalCase names; this rename does not c
 
 ### Direction, speed and tick ordering
 
-Movement is on the XZ ground plane: +X right, +Z forward, +Y up, one unit = one meter. Input does not
-change Y. A direction with length greater than 1 is normalized; a shorter direction retains its analog
-magnitude. The maximum speed is 5 meters per second, currently a code constant, not a runtime option.
-Each world tick processes its bounded Join/Leave batch first, then updates each active player's position
-once: position += direction * 5 * fixedDeltaSeconds. Packet count never multiplies movement distance.
-(0, 0) stops movement on the next tick. No collision, gravity, jumping, map bounds or acceleration is included.
+Movement input controls horizontal velocity (+X right, +Z forward). Y points up and one unit is one meter.
+Directions longer than 1 are normalized. Shorter directions retain their analog magnitude. Maximum horizontal
+speed is 5 m/s. Each occupied world processes Join/Leave, sets horizontal velocities, advances its Bepu
+simulation once for the fixed tick, then publishes the players' foot positions. A zero or expired input
+stops horizontal movement while gravity continues. The floor spans 100 m × 100 m at the origin. Players
+can walk off its edge and fall. Gravity magnitude comes from SERVER_GRAVITY_METERS_PER_SECOND_SQUARED.
 
 One lock-protected latest-input slot belongs to each admission token; movement does not enqueue world
 commands. Newer packets replace the slot, so a burst cannot consume Join/Leave queue capacity. The world

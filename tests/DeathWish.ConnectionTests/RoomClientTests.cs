@@ -61,6 +61,11 @@ static class RoomClientTests
             if (firstAck.PlayerId == secondAck.PlayerId || firstAck.ServerTick != 1 || secondAck.ServerTick != 1 ||
                 firstAck.RoomId != 1 || firstAck.X != 0 || firstAck.Y != 0 || firstAck.Z != 0)
                 throw new Exception("TCP JoinAck does not match world admission");
+            var secondSpawn = new System.Numerics.Vector3(secondAck.X, secondAck.Y, secondAck.Z);
+            if (secondSpawn.Length() < 1 || System.Numerics.Vector3.Distance(secondSpawn, players.Single(player => player.PlayerId == secondAck.PlayerId).Position) > .001f)
+            {
+                throw new Exception("Second spawn must be separate and match its announced position");
+            }
             if (players.Length != 2 || players.Select(player => player.PlayerId).Distinct().Count() != 2 ||
                 !players.Select(player => player.SessionId).Order().SequenceEqual(room.GetMemberIds().Order()))
                 throw new Exception("TCP room admission did not create two distinct world players");
@@ -73,7 +78,7 @@ static class RoomClientTests
             await clock.NextDelayAsync();
             players = room.World.GetPlayers();
             if (Math.Abs(players.Single(player => player.PlayerId == firstAck.PlayerId).Position.X - .5f) > .0001f ||
-                players.Single(player => player.PlayerId == secondAck.PlayerId).Position != System.Numerics.Vector3.Zero)
+                System.Numerics.Vector3.Distance(players.Single(player => player.PlayerId == secondAck.PlayerId).Position, secondSpawn) > .001f)
             {
                 throw new Exception("TCP movement did not apply exclusively to its sender");
             }
@@ -94,6 +99,34 @@ static class RoomClientTests
             if (Math.Abs(room.World.GetPlayers().Single(player => player.PlayerId == firstAck.PlayerId).Position.X - .5f) > .0001f)
             {
                 throw new Exception("Expired TCP input continued moving during catch-up");
+            }
+
+            for (uint sequence = 1; sequence <= 51; sequence++)
+            {
+                await first.SendMoveAsync(new MoveInput(sequence, 1, 0), deadline.Token);
+                await first.EchoAsync("edge input received", deadline.Token);
+                clock.Advance(TimeSpan.FromMilliseconds(200));
+                await clock.NextDelayAsync();
+            }
+
+            var edgePosition = room.World.GetPlayers().Single(player => player.PlayerId == firstAck.PlayerId).Position;
+            await first.SendMoveAsync(new MoveInput(52, 0, 0), deadline.Token);
+            await first.EchoAsync("stop received", deadline.Token);
+            clock.Advance(TimeSpan.FromMilliseconds(200));
+            await clock.NextDelayAsync();
+            long fallingTick = room.World.CurrentTick;
+            while (first.LatestSnapshot?.ServerTick != fallingTick || second.LatestSnapshot?.ServerTick != fallingTick)
+            {
+                await Task.Delay(1, deadline.Token);
+            }
+
+            var falling = room.World.GetPlayers().Single(player => player.PlayerId == firstAck.PlayerId).Position;
+            SnapshotPlayer observed = second.LatestSnapshot!.Players.Single(player => player.PlayerId == firstAck.PlayerId);
+            if (edgePosition.Y >= 0 || falling.Y >= edgePosition.Y || MathF.Abs(falling.X - edgePosition.X) > .0001f ||
+                observed.X != falling.X || observed.Y != falling.Y || observed.Z != falling.Z ||
+                !SnapshotCodec.Encode(first.LatestSnapshot!).SequenceEqual(SnapshotCodec.Encode(second.LatestSnapshot!)))
+            {
+                throw new Exception("Both TCP clients must see the authoritative falling position after horizontal input stops.");
             }
 
             await listener.CloseAsync();

@@ -14,6 +14,7 @@ public sealed class GameServer
     private readonly IPEndPoint _endpoint;
     private readonly int _roomCount;
     private readonly int _tickRate;
+    private readonly float _gravityMetersPerSecondSquared;
     private readonly TimeProvider _timeProvider;
 
     public GameServer(ServerOptions options) : this(options, TimeProvider.System) { }
@@ -25,6 +26,7 @@ public sealed class GameServer
         _endpoint = new IPEndPoint(IPAddress.Parse(options.Address), options.Port);
         _roomCount = options.RoomCount;
         _tickRate = options.TickRate;
+        _gravityMetersPerSecondSquared = options.GravityMetersPerSecondSquared;
         _timeProvider = timeProvider;
     }
 
@@ -34,7 +36,7 @@ public sealed class GameServer
 
         var sessions = new SessionManager();
         var rooms = new RoomManager(sessions, _roomCount, GameWorld.DEFAULT_ADMISSION_CAPACITY,
-            GameWorld.DEFAULT_MAX_COMMANDS_PER_TICK, _timeProvider);
+            GameWorld.DEFAULT_MAX_COMMANDS_PER_TICK, _timeProvider, _gravityMetersPerSecondSquared);
         var worldLoop = new WorldLoop(rooms.GetWorlds(), _tickRate, _timeProvider);
         using var loopCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task? worldTask = null;
