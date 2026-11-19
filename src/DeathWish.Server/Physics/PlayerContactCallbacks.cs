@@ -16,7 +16,7 @@ internal readonly struct PlayerContactCallbacks : INarrowPhaseCallbacks
 
     public bool AllowContactGeneration(int workerIndex, CollidableReference a, CollidableReference b, ref float speculativeMargin)
     {
-        // Players may share a spawn and only interact with static level geometry.
+        // Player movement only resolves contacts with static level geometry.
         return a.Mobility == CollidableMobility.Static || b.Mobility == CollidableMobility.Static;
     }
 

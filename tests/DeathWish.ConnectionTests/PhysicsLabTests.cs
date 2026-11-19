@@ -12,10 +12,11 @@ internal static class PhysicsLabTests
     internal static void Run()
     {
         var sessions = new SessionManager();
-        var rooms = new RoomManager(sessions, 2, 4, 4, physicsLabRoomId: 2);
+        const int ROOM_COUNT = 5;
+        var rooms = new RoomManager(sessions, ROOM_COUNT, 4, 4);
         GameWorld[] worlds = rooms.GetWorlds();
-        GameWorld lab = worlds[1];
-        Require(worlds[0].Colliders.Count == 1 && worlds[0].Colliders[0] is PlaneCollider, "Flat room selection");
+        GameWorld lab = worlds[^1];
+        Require(worlds.Take(ROOM_COUNT - 1).All(world => world.Colliders.Count == 1 && world.Colliders[0] is PlaneCollider), "Flat room selection");
         Require(lab.Colliders.Count == 7 && lab.Colliders.All(collider => collider is StaticMeshCollider),
             "Seven static mesh objects and no fallback floor");
 
@@ -23,7 +24,7 @@ internal static class PhysicsLabTests
         var channel = new EmbeddedChannel(handler);
         try
         {
-            Require(rooms.Join(handler.Session!.SessionId, 2) == RoomJoinResult.Success, "Join lab room");
+            Require(rooms.Join(handler.Session!.SessionId, ROOM_COUNT) == RoomJoinResult.Success, "Join lab room");
             for (int tick = 0; tick < 60; tick++)
             {
                 lab.Tick(TICK_SECONDS);

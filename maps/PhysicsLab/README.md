@@ -24,6 +24,6 @@ python tools/physics_lab/verify_map.py maps/PhysicsLab/PhysicsLab.json
 
 ## 서버에서 선택하기
 
-예를 들어 방이 두 개인 서버에서 `SERVER_PHYSICS_LAB_ROOM_ID=2`를 환경변수 또는 `.env`에 지정하고 재시작하면 2번 방이 PhysicsLab을 사용한다. 나머지 방은 기존 평지 맵을 사용한다. 생략하거나 빈 값이면 모든 방이 평지이며, 방 번호는 1부터 SERVER_ROOM_COUNT 사이여야 한다.
+방 번호는 1부터 시작하며 가장 큰 번호가 항상 PhysicsLab이다. 서버의 SERVER_ROOM_COUNT가 5이면 1~4번은 평지, 5번은 PhysicsLab이다. 방이 하나면 1번이 PhysicsLab이다.
 
-빌드에 포함된 JSON을 읽어 오브젝트별로 Bepu 정적 메시 하나를 등록한다. 로컬 좌표로 옮긴 정점과 오브젝트 중심을 함께 사용해 월드 배치를 복원한다. 앞면 순서는 추출 결과를 유지하며 스폰은 원점의 발 좌표다. Unity 표시 연동은 4단계다.
+빌드에 포함된 JSON을 읽어 오브젝트별로 Bepu 정적 메시 하나를 등록한다. 로컬 좌표로 옮긴 정점과 오브젝트 중심을 함께 사용해 월드 배치를 복원한다. 앞면 순서는 추출 결과를 유지하며 입장 시 원점이 비어 있으면 그곳에, 사용 중이면 주변 바닥에 플레이어의 발을 배치한다. Unity의 SyncTestScene은 입장 응답에 따라 동일한 JSON에서 지형을 표시한다. Play 모드에서 서버에 설정한 방 번호로 접속한 뒤 Capture input을 눌러 WASD로 이동한다.

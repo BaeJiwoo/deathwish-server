@@ -34,18 +34,7 @@ public static class ServerOptionsLoader
             throw new ArgumentException("SERVER_GRAVITY_METERS_PER_SECOND_SQUARED must be a nonnegative finite number.");
         }
 
-        string mapRoomText = Resolve("SERVER_PHYSICS_LAB_ROOM_ID", "");
-        int? physicsLabRoomId = null;
-        if (mapRoomText.Length > 0)
-        {
-            if (!int.TryParse(mapRoomText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int roomId))
-            {
-                throw new ArgumentException("SERVER_PHYSICS_LAB_ROOM_ID must be a configured room ID.");
-            }
-            physicsLabRoomId = roomId;
-        }
-
-        return new ServerOptions(address, port, roomCount, tickRate, gravityMetersPerSecondSquared, physicsLabRoomId);
+        return new ServerOptions(address, port, roomCount, tickRate, gravityMetersPerSecondSquared);
     }
 
     private static Dictionary<string, string> ReadFile(string path)

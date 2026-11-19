@@ -47,6 +47,7 @@ foreach ($legacy in $legacyPaths) {
 & dotnet build (Join-Path $repo 'mockclient/DeathWish.MockClient.Core') -c Release -m:1 -nr:false
 if ($LASTEXITCODE -ne 0) { throw 'Client build failed. The manifest repair has completed; integration files were not changed.' }
 New-Item -ItemType Directory -Force -Path (Join-Path $destination 'Scenes'), (Join-Path $destination 'Resources') | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo 'maps/PhysicsLab/PhysicsLab.json') -Destination (Join-Path $destination 'Resources') -Force
 foreach ($file in @('SyncTestWorld.shader', 'SyncTestWorld.shader.meta')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Resources/$file") -Destination (Join-Path $destination 'Resources') -Force
 }

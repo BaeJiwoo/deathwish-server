@@ -9,8 +9,16 @@ public readonly struct JoinAck
     public float Y { get; }
     public float Z { get; }
 
+    public bool IsPhysicsLab { get; }
+
     public JoinAck(int roomId, long playerId, long serverTick, float x, float y, float z)
+        : this(roomId, playerId, serverTick, x, y, z, false)
     {
+    }
+
+    public JoinAck(int roomId, long playerId, long serverTick, float x, float y, float z, bool isPhysicsLab)
+    {
+        IsPhysicsLab = isPhysicsLab;
         RoomId = roomId;
         PlayerId = playerId;
         ServerTick = serverTick;

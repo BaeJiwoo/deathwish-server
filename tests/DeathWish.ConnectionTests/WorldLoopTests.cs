@@ -45,11 +45,11 @@ static class WorldLoopTests
 
     private static void VerifyWorldFloors(GameWorld[] worlds)
     {
-        foreach (GameWorld world in worlds)
+        foreach (GameWorld world in worlds[..^1])
         {
             if (world.Colliders.Count != 1 || world.Colliders[0] is not PlaneCollider floor)
             {
-                throw new Exception("Each new room must start with exactly one floor plane.");
+                throw new Exception("Each flat room must start with exactly one floor plane.");
             }
 
             Require(floor.CenterWorldPositionMeters == Vector3.Zero && floor.WidthMeters == 100 && floor.DepthMeters == 100,

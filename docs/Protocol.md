@@ -166,7 +166,7 @@ Exit code 2 indicates socket checks were skipped due to environment permissions.
 
 ## World admission completion (Stage 5)
 
-JoinAck (type 5) has exactly 32 payload bytes, 35 including the header. All integers and IEEE-754
+JoinAck (type 5) has a 32-byte base payload. A flat room sends only the base payload. A PhysicsLab room appends one byte with value 1 at offset 32. Any other extension is invalid. Clients restricted to the original 32-byte format require an update to join PhysicsLab. All integers and IEEE-754
 binary32 position bits use big-endian byte order. Invalid lengths, nonpositive IDs/ticks, and
 nonfinite coordinates are protocol errors. RoomId is positive int32; PlayerId and ServerTick are positive int64.
 
@@ -179,8 +179,7 @@ nonfinite coordinates are protocol errors. RoomId is positive int32; PlayerId an
 | 24 | 4 | Spawn Y, float32 |
 | 28 | 4 | Spawn Z, float32 |
 
-Positions use world units (one unit = one meter), +X right, +Y up, +Z forward. Initial spawn is
-(0, 0, 0). There is no quantization yet. Example for room 1, player 2, tick 3, position (1, -2, 0.5):
+Positions use world units (one unit = one meter), +X right, +Y up, +Z forward. The server chooses an available spawn near the origin and sends its foot position in JoinAck. There is no quantization yet. Example for room 1, player 2, tick 3, position (1, -2, 0.5):
 `00 20 05 00 00 00 01 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 03 3F 80 00 00 C0 00 00 00 3F 00 00 00`.
 
 The first successful JoinRoomResponse is queued before JoinAck, even if the world ticks concurrently.

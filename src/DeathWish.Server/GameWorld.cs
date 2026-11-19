@@ -9,11 +9,24 @@ public sealed class GameWorld
 {
     private const double SNAPSHOT_INTERVAL_SECONDS = 0.1;
     private const float FLOOR_SIDE_LENGTH_METERS = 100f;
+    private const int SPAWN_MIN_X_METERS = -7;
+    private const int SPAWN_MAX_X_METERS = 24;
+    private const int SPAWN_MIN_ABS_Z_METERS = 2;
+    private const int SPAWN_MAX_ABS_Z_METERS = 24;
     internal const float MOVEMENT_SPEED_METERS_PER_SECOND = 5f;
     internal const int DEFAULT_ADMISSION_CAPACITY = 1024;
     internal const int DEFAULT_MAX_COMMANDS_PER_TICK = 128;
 
+    // Keep the spawn strips clear of the ramp and ring. Prefer the floor nearest the origin.
+    private static readonly (int X, int Z)[] SpawnCells =
+        (from z in Enumerable.Range(-SPAWN_MAX_ABS_Z_METERS, SPAWN_MAX_ABS_Z_METERS * 2 + 1)
+         from x in Enumerable.Range(SPAWN_MIN_X_METERS, SPAWN_MAX_X_METERS - SPAWN_MIN_X_METERS + 1)
+         where Math.Abs(z) >= SPAWN_MIN_ABS_Z_METERS
+         orderby (x + 1) * (x + 1) + (z - SPAWN_MIN_ABS_Z_METERS) * (z - SPAWN_MIN_ABS_Z_METERS)
+         select (x, z)).ToArray();
+
     private readonly Dictionary<WorldAdmission, WorldPlayer> _players = new();
+    private readonly bool _isPhysicsLab;
     private PlayerPhysicsSimulation? _physics;
     private readonly int _maxCommandsPerTick;
     private readonly float _gravityMetersPerSecondSquared;
@@ -48,6 +61,7 @@ public sealed class GameWorld
         _maxCommandsPerTick = maxCommandsPerTick;
         _gravityMetersPerSecondSquared = gravityMetersPerSecondSquared;
         Commands = new WorldCommandQueue(admissionCapacity, timeProvider);
+        _isPhysicsLab = isPhysicsLab;
         Colliders = isPhysicsLab
             ? PhysicsLabMap.LoadColliders()
             : [new PlaneCollider(Vector3.Zero, FLOOR_SIDE_LENGTH_METERS, FLOOR_SIDE_LENGTH_METERS)];
@@ -85,11 +99,12 @@ public sealed class GameWorld
                     }
                     long playerId = checked(_lastPlayerId + 1);
                     _physics ??= CreatePhysicsSimulation();
-                    BodyHandle body = _physics.AddPlayer(Vector3.Zero);
-                    _players.Add(admission, new WorldPlayer(body, new PlayerState(playerId, admission.Session.SessionId, Vector3.Zero)));
+                    Vector3 spawn = FindSpawnPosition();
+                    BodyHandle body = _physics.AddPlayer(spawn);
+                    _players.Add(admission, new WorldPlayer(body, new PlayerState(playerId, admission.Session.SessionId, spawn)));
                     _lastPlayerId = playerId;
                     changed = true;
-                    admission.Session.Send(PacketCodec.EncodeJoinAck(new JoinAck(RoomId, playerId, completedTick, 0, 0, 0)));
+                    admission.Session.Send(PacketCodec.EncodeJoinAck(new JoinAck(RoomId, playerId, completedTick, spawn.X, spawn.Y, spawn.Z, _isPhysicsLab)));
                     break;
                 case WorldCommandType.Leave:
                     if (_players.Remove(admission, out WorldPlayer? leaving))
@@ -120,6 +135,53 @@ public sealed class GameWorld
 
         // Publish completion after simulation work; readers do not acquire ownership of world state.
         Interlocked.Exchange(ref _currentTick, completedTick);
+    }
+
+    private Vector3 FindSpawnPosition()
+    {
+        // Block the integer grid points that would overlap a standing player's footprint.
+        var occupied = new HashSet<(int X, int Z)>();
+        var nearestCells = new HashSet<(int X, int Z)>();
+        foreach (WorldPlayer player in _players.Values)
+        {
+            Vector3 foot = player.State.Position;
+            bool outsideSpawnArea = MathF.Abs(foot.Y) >= PlayerPhysicsSimulation.PLAYER_HEIGHT_METERS ||
+                foot.X < SPAWN_MIN_X_METERS - 1 || foot.X > SPAWN_MAX_X_METERS + 1 ||
+                MathF.Abs(foot.Z) > SPAWN_MAX_ABS_Z_METERS + 1;
+            if (outsideSpawnArea)
+            {
+                continue;
+            }
+            nearestCells.Add(((int)MathF.Round(foot.X), (int)MathF.Round(foot.Z)));
+            int maxX = (int)MathF.Floor(foot.X + PlayerPhysicsSimulation.PLAYER_WIDTH_METERS);
+            int maxZ = (int)MathF.Floor(foot.Z + PlayerPhysicsSimulation.PLAYER_DEPTH_METERS);
+            for (int x = (int)MathF.Ceiling(foot.X - PlayerPhysicsSimulation.PLAYER_WIDTH_METERS); x <= maxX; x++)
+            {
+                for (int z = (int)MathF.Ceiling(foot.Z - PlayerPhysicsSimulation.PLAYER_DEPTH_METERS); z <= maxZ; z++)
+                {
+                    occupied.Add((x, z));
+                }
+            }
+        }
+        if (!occupied.Contains((0, 0)))
+        {
+            return Vector3.Zero;
+        }
+
+        Vector3? crowdedFallback = null;
+        foreach ((int x, int z) in SpawnCells)
+        {
+            if (!occupied.Contains((x, z)))
+            {
+                return new Vector3(x, 0, z);
+            }
+            if (crowdedFallback == null && !nearestCells.Contains((x, z)))
+            {
+                crowdedFallback = new Vector3(x, 0, z);
+            }
+        }
+        // The strips contain more grid cells than the room's admission capacity.
+        return crowdedFallback ?? throw new InvalidOperationException("Spawn area exhausted.");
     }
 
     private void BroadcastSnapshot(long serverTick)

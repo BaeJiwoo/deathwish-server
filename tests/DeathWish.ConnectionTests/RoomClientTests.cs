@@ -61,6 +61,11 @@ static class RoomClientTests
             if (firstAck.PlayerId == secondAck.PlayerId || firstAck.ServerTick != 1 || secondAck.ServerTick != 1 ||
                 firstAck.RoomId != 1 || firstAck.X != 0 || firstAck.Y != 0 || firstAck.Z != 0)
                 throw new Exception("TCP JoinAck does not match world admission");
+            var secondSpawn = new System.Numerics.Vector3(secondAck.X, secondAck.Y, secondAck.Z);
+            if (secondSpawn.Length() < 1 || System.Numerics.Vector3.Distance(secondSpawn, players.Single(player => player.PlayerId == secondAck.PlayerId).Position) > .001f)
+            {
+                throw new Exception("Second spawn must be separate and match its announced position");
+            }
             if (players.Length != 2 || players.Select(player => player.PlayerId).Distinct().Count() != 2 ||
                 !players.Select(player => player.SessionId).Order().SequenceEqual(room.GetMemberIds().Order()))
                 throw new Exception("TCP room admission did not create two distinct world players");
@@ -73,7 +78,7 @@ static class RoomClientTests
             await clock.NextDelayAsync();
             players = room.World.GetPlayers();
             if (Math.Abs(players.Single(player => player.PlayerId == firstAck.PlayerId).Position.X - .5f) > .0001f ||
-                players.Single(player => player.PlayerId == secondAck.PlayerId).Position != System.Numerics.Vector3.Zero)
+                System.Numerics.Vector3.Distance(players.Single(player => player.PlayerId == secondAck.PlayerId).Position, secondSpawn) > .001f)
             {
                 throw new Exception("TCP movement did not apply exclusively to its sender");
             }

@@ -41,6 +41,7 @@ GravityTests.Run();
 PrimitiveTests.Run();
 BepuMovementTests.Run();
 PhysicsLabTests.Run();
+PhysicsLabTraversalTests.Run();
 MovementInputTests.Run();
 await SnapshotTests.RunAsync();
 await MovementTests.RunAsync();

@@ -172,6 +172,7 @@ static class MovementTests
         {
             fixture.Rooms.Join(otherHandler.Session!.SessionId, 1);
             fixture.World.Tick(DELTA_SECONDS);
+            Vector3 otherStart = fixture.World.GetPlayers().Single(player => player.SessionId == otherHandler.Session.SessionId).Position;
             byte[] frame = PacketCodec.EncodeMoveInput(new MoveInput(0, 0, 1));
             fixture.Channel.WriteInbound(Unpooled.WrappedBuffer(frame[..5]));
             fixture.World.Tick(DELTA_SECONDS);
@@ -180,7 +181,7 @@ static class MovementTests
             fixture.World.Tick(DELTA_SECONDS);
             Near(fixture.Position, new Vector3(0, 0, 5 * DELTA_SECONDS), "Input applies to sender");
             Near(fixture.World.GetPlayers().Single(player => player.SessionId == otherHandler.Session.SessionId).Position,
-                Vector3.Zero, "Other player in same room remains unaffected");
+                otherStart, "Other player in same room remains unaffected");
 
             byte[] malformed = (byte[])frame.Clone();
             BinaryPrimitives.WriteInt32BigEndian(malformed.AsSpan(7), BitConverter.SingleToInt32Bits(float.NaN));
