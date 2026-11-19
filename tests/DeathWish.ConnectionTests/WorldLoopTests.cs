@@ -1,4 +1,6 @@
+using System.Numerics;
 using DeathWish.Server;
+using DeathWish.Server.Physics;
 
 static class WorldLoopTests
 {
@@ -22,6 +24,7 @@ static class WorldLoopTests
         GameWorld[] worlds = rooms.GetWorlds();
         Require(worlds.Select(world => world.RoomId).SequenceEqual(new[] { 1, 2, 3 }), "Ordered room worlds");
         Require(worlds.All(world => world.CurrentTick == 0) && worlds.Distinct().Count() == 3, "Independent new worlds");
+        VerifyWorldFloors(worlds);
         Require(rooms.TryGetRoom(2, out var room) && ReferenceEquals(room.World, worlds[1]), "Room owns its world");
         worlds[0] = worlds[1];
         Require(rooms.GetWorlds()[0].RoomId == 1, "World array is a copy");
@@ -38,6 +41,24 @@ static class WorldLoopTests
         Reject<ArgumentException>(() => new WorldLoop(new GameWorld[] { null! }, 30));
         Reject<ArgumentException>(() => new WorldLoop(new[] { world, new GameWorld(1) }, 30));
         Reject<ArgumentOutOfRangeException>(() => new WorldLoop(new[] { world }, 0));
+    }
+
+    private static void VerifyWorldFloors(GameWorld[] worlds)
+    {
+        foreach (GameWorld world in worlds)
+        {
+            if (world.Colliders.Count != 1 || world.Colliders[0] is not PlaneCollider floor)
+            {
+                throw new Exception("Each new room must start with exactly one floor plane.");
+            }
+
+            Require(floor.CenterWorldPositionMeters == Vector3.Zero && floor.WidthMeters == 10 && floor.DepthMeters == 10,
+                "Floor is centered at the origin and measures 10 m on both axes");
+            Require(floor.GetBounds() == (new Vector3(-5, 0, -5), new Vector3(5, 0, 5)), "Floor world bounds");
+        }
+
+        Require(worlds.Select(world => world.Colliders).Distinct().Count() == worlds.Length, "Independent collider lists");
+        Require(worlds.Select(world => world.Colliders[0]).Distinct().Count() == worlds.Length, "Independent floor instances");
     }
 
     private static async Task VerifySchedule()

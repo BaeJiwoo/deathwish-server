@@ -174,8 +174,8 @@ Checkpoint 1 verification: `dotnet build tests/DeathWish.ConnectionTests --no-re
 Review each unit before committing it and starting the next unit.
 
 1. Gravity integration and server configuration — approved and committed. Configure the downward acceleration magnitude with `SERVER_GRAVITY_METERS_PER_SECOND_SQUARED` (default 9.81, finite and nonnegative). Store vertical velocity per player and advance height with the updated velocity.
-2. Generic box and finite horizontal plane colliders — implemented, awaiting review. Both carry their own world center and dimensions and expose world bounds through Collider. Mixed-list tests cover independent placement and movement. Player dimensions and placement belong to the integration step.
-3. Give each world a list of colliders and place a 10 m × 10 m plane at its origin.
+2. Generic box and finite horizontal plane colliders — approved and committed. Both carry their own world center and dimensions and expose world bounds through Collider. Mixed-list tests cover independent placement and movement. Player dimensions and placement belong to the integration step.
+3. Per-world collider list and origin floor — implemented, awaiting review. Each world creates one 10 m × 10 m plane at Y = 0. Room creation tests verify bounds and independent list and floor instances.
 4. Resolve falling box contact at the plane crossing, including partial overlap, fast falls and edge departure.
 5. Integrate movement and gravity for every active player between lifecycle processing and snapshot publication. Verify spawning, idle fall, stable landing and authoritative snapshot height.
 

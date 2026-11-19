@@ -1,11 +1,13 @@
 using System.Numerics;
 using DeathWish.Protocol;
+using DeathWish.Server.Physics;
 
 namespace DeathWish.Server;
 
 public sealed class GameWorld
 {
     private const double SNAPSHOT_INTERVAL_SECONDS = 0.1;
+    private const float FLOOR_SIDE_LENGTH_METERS = 10f;
     internal const float MOVEMENT_SPEED_METERS_PER_SECOND = 5f;
     internal const int DEFAULT_ADMISSION_CAPACITY = 1024;
     internal const int DEFAULT_MAX_COMMANDS_PER_TICK = 128;
@@ -24,6 +26,9 @@ public sealed class GameWorld
     public int PlayerCount => Volatile.Read(ref _publishedPlayers).Length;
     internal WorldCommandQueue Commands { get; }
 
+    /// <summary>World-owned colliders. After startup only the owning world loop may access them.</summary>
+    internal IReadOnlyList<Collider> Colliders { get; }
+
     internal GameWorld(int roomId, int admissionCapacity = DEFAULT_ADMISSION_CAPACITY,
         int maxCommandsPerTick = DEFAULT_MAX_COMMANDS_PER_TICK, TimeProvider? timeProvider = null)
     {
@@ -38,6 +43,10 @@ public sealed class GameWorld
         RoomId = roomId;
         _maxCommandsPerTick = maxCommandsPerTick;
         Commands = new WorldCommandQueue(admissionCapacity, timeProvider);
+        Colliders = new List<Collider>
+        {
+            new PlaneCollider(Vector3.Zero, FLOOR_SIDE_LENGTH_METERS, FLOOR_SIDE_LENGTH_METERS)
+        }.AsReadOnly();
     }
 
     /// <summary>Returns a defensive copy of the player states published after the last completed update.</summary>
