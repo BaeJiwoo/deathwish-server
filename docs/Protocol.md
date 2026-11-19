@@ -229,12 +229,12 @@ MAX_PAYLOAD_LENGTH replace their former PascalCase names; this rename does not c
 
 ### Direction, speed and tick ordering
 
-Movement is on the XZ ground plane: +X right, +Z forward, +Y up, one unit = one meter. Input does not
-change Y. A direction with length greater than 1 is normalized; a shorter direction retains its analog
-magnitude. The maximum speed is 5 meters per second, currently a code constant, not a runtime option.
-Each world tick processes its bounded Join/Leave batch first, then updates each active player's position
-once: position += direction * 5 * fixedDeltaSeconds. Packet count never multiplies movement distance.
-(0, 0) stops movement on the next tick. No collision, gravity, jumping, map bounds or acceleration is included.
+Movement input controls horizontal velocity (+X right, +Z forward). Y points up and one unit is one meter.
+Directions longer than 1 are normalized. Shorter directions retain their analog magnitude. Maximum horizontal
+speed is 5 m/s. Each occupied world processes Join/Leave, sets horizontal velocities, advances its Bepu
+simulation once for the fixed tick, then publishes the players' foot positions. A zero or expired input
+stops horizontal movement while gravity continues. The floor spans 100 m × 100 m at the origin. Players
+can walk off its edge and fall. Gravity magnitude comes from SERVER_GRAVITY_METERS_PER_SECOND_SQUARED.
 
 One lock-protected latest-input slot belongs to each admission token; movement does not enqueue world
 commands. Newer packets replace the slot, so a burst cannot consume Join/Leave queue capacity. The world

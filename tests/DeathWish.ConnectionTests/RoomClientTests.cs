@@ -96,6 +96,34 @@ static class RoomClientTests
                 throw new Exception("Expired TCP input continued moving during catch-up");
             }
 
+            for (uint sequence = 1; sequence <= 51; sequence++)
+            {
+                await first.SendMoveAsync(new MoveInput(sequence, 1, 0), deadline.Token);
+                await first.EchoAsync("edge input received", deadline.Token);
+                clock.Advance(TimeSpan.FromMilliseconds(200));
+                await clock.NextDelayAsync();
+            }
+
+            var edgePosition = room.World.GetPlayers().Single(player => player.PlayerId == firstAck.PlayerId).Position;
+            await first.SendMoveAsync(new MoveInput(52, 0, 0), deadline.Token);
+            await first.EchoAsync("stop received", deadline.Token);
+            clock.Advance(TimeSpan.FromMilliseconds(200));
+            await clock.NextDelayAsync();
+            long fallingTick = room.World.CurrentTick;
+            while (first.LatestSnapshot?.ServerTick != fallingTick || second.LatestSnapshot?.ServerTick != fallingTick)
+            {
+                await Task.Delay(1, deadline.Token);
+            }
+
+            var falling = room.World.GetPlayers().Single(player => player.PlayerId == firstAck.PlayerId).Position;
+            SnapshotPlayer observed = second.LatestSnapshot!.Players.Single(player => player.PlayerId == firstAck.PlayerId);
+            if (edgePosition.Y >= 0 || falling.Y >= edgePosition.Y || MathF.Abs(falling.X - edgePosition.X) > .0001f ||
+                observed.X != falling.X || observed.Y != falling.Y || observed.Z != falling.Z ||
+                !SnapshotCodec.Encode(first.LatestSnapshot!).SequenceEqual(SnapshotCodec.Encode(second.LatestSnapshot!)))
+            {
+                throw new Exception("Both TCP clients must see the authoritative falling position after horizontal input stops.");
+            }
+
             await listener.CloseAsync();
             await connections.CloseAsync();
             await Task.WhenAll(first.Disconnected, second.Disconnected).WaitAsync(deadline.Token);

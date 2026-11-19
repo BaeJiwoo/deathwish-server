@@ -1,4 +1,5 @@
 using System.Numerics;
+using BepuPhysics;
 using DeathWish.Protocol;
 using DeathWish.Server.Physics;
 
@@ -7,14 +8,15 @@ namespace DeathWish.Server;
 public sealed class GameWorld
 {
     private const double SNAPSHOT_INTERVAL_SECONDS = 0.1;
-    private const float FLOOR_SIDE_LENGTH_METERS = 10f;
-    internal const float MOVEMENT_SPEED_METERS_PER_SECOND = 5f;
+    private const float FLOOR_SIDE_LENGTH_METERS = 100f;
+    internal const float MOVEMENT_SPEED_METERS_PER_SECOND = 10f;
     internal const int DEFAULT_ADMISSION_CAPACITY = 1024;
     internal const int DEFAULT_MAX_COMMANDS_PER_TICK = 128;
 
-    private readonly Dictionary<WorldAdmission, PlayerState> _players = new();
-    private readonly List<(WorldAdmission Admission, PlayerState Player)> _movementUpdates = new();
+    private readonly Dictionary<WorldAdmission, WorldPlayer> _players = new();
+    private PlayerPhysicsSimulation? _physics;
     private readonly int _maxCommandsPerTick;
+    private readonly float _gravityMetersPerSecondSquared;
     private PlayerState[] _publishedPlayers = Array.Empty<PlayerState>();
     private long _lastPlayerId;
     private long _currentTick;
@@ -30,7 +32,8 @@ public sealed class GameWorld
     internal IReadOnlyList<Collider> Colliders { get; }
 
     internal GameWorld(int roomId, int admissionCapacity = DEFAULT_ADMISSION_CAPACITY,
-        int maxCommandsPerTick = DEFAULT_MAX_COMMANDS_PER_TICK, TimeProvider? timeProvider = null)
+        int maxCommandsPerTick = DEFAULT_MAX_COMMANDS_PER_TICK, TimeProvider? timeProvider = null,
+        float gravityMetersPerSecondSquared = ServerOptions.DEFAULT_GRAVITY_METERS_PER_SECOND_SQUARED)
     {
         if (roomId < 1)
         {
@@ -42,12 +45,16 @@ public sealed class GameWorld
         }
         RoomId = roomId;
         _maxCommandsPerTick = maxCommandsPerTick;
+        _gravityMetersPerSecondSquared = gravityMetersPerSecondSquared;
         Commands = new WorldCommandQueue(admissionCapacity, timeProvider);
         Colliders = new List<Collider>
         {
             new PlaneCollider(Vector3.Zero, FLOOR_SIDE_LENGTH_METERS, FLOOR_SIDE_LENGTH_METERS)
         }.AsReadOnly();
     }
+
+    /// <summary>Creates a simulation from the room's static geometry and gravity. The caller owns and disposes it.</summary>
+    internal PlayerPhysicsSimulation CreatePhysicsSimulation() => new(Colliders, _gravityMetersPerSecondSquared);
 
     /// <summary>Returns a defensive copy of the player states published after the last completed update.</summary>
     public PlayerState[] GetPlayers() => Volatile.Read(ref _publishedPlayers).ToArray();
@@ -77,13 +84,19 @@ public sealed class GameWorld
                         break;
                     }
                     long playerId = checked(_lastPlayerId + 1);
-                    _players.Add(admission, new PlayerState(playerId, admission.Session.SessionId, Vector3.Zero));
+                    _physics ??= CreatePhysicsSimulation();
+                    BodyHandle body = _physics.AddPlayer(Vector3.Zero);
+                    _players.Add(admission, new WorldPlayer(body, new PlayerState(playerId, admission.Session.SessionId, Vector3.Zero)));
                     _lastPlayerId = playerId;
                     changed = true;
                     admission.Session.Send(PacketCodec.EncodeJoinAck(new JoinAck(RoomId, playerId, completedTick, 0, 0, 0)));
                     break;
                 case WorldCommandType.Leave:
-                    changed |= _players.Remove(admission);
+                    if (_players.Remove(admission, out WorldPlayer? leaving))
+                    {
+                        _physics!.RemovePlayer(leaving.Body);
+                        changed = true;
+                    }
                     Commands.Release(admission);
                     break;
                 default:
@@ -92,10 +105,10 @@ public sealed class GameWorld
         }
 
         // Lifecycle commands run first; movement never adds commands to the bounded Join/Leave queue.
-        changed |= UpdateMovement(deltaTimeSeconds);
+        changed |= StepPhysics(deltaTimeSeconds);
         if (changed)
         {
-            Volatile.Write(ref _publishedPlayers, _players.Values.ToArray());
+            Volatile.Write(ref _publishedPlayers, _players.Values.Select(player => player.State).ToArray());
         }
 
         _snapshotElapsedSeconds += deltaTimeSeconds;
@@ -112,8 +125,9 @@ public sealed class GameWorld
     private void BroadcastSnapshot(long serverTick)
     {
         var players = _players.Where(pair => !pair.Key.IsDeparted && !pair.Key.Session.IsDisconnected)
-            .Select(pair => new SnapshotPlayer(pair.Value.PlayerId, pair.Value.Position.X,
-                pair.Value.Position.Y, pair.Value.Position.Z)).OrderBy(player => player.PlayerId).ToArray();
+            .Select(pair => pair.Value.State)
+            .Select(state => new SnapshotPlayer(state.PlayerId, state.Position.X, state.Position.Y, state.Position.Z))
+            .OrderBy(player => player.PlayerId).ToArray();
         byte[] frame = SnapshotCodec.Encode(new WorldSnapshot(RoomId, serverTick, players));
         foreach (WorldAdmission admission in _players.Keys)
         {
@@ -124,31 +138,41 @@ public sealed class GameWorld
         }
     }
 
-    private bool UpdateMovement(float deltaTimeSeconds)
+    private bool StepPhysics(float deltaTimeSeconds)
     {
-        _movementUpdates.Clear();
-        foreach ((WorldAdmission admission, PlayerState player) in _players)
+        if (_physics is null || _players.Count == 0)
+        {
+            return false;
+        }
+
+        foreach ((WorldAdmission admission, WorldPlayer player) in _players)
         {
             if (admission.IsDeparted || admission.Session.IsDisconnected)
             {
                 continue;
             }
 
-            Vector3 direction = admission.Movement.GetDirection();
-            if (direction == Vector3.Zero)
+            Vector3 velocity = admission.Movement.GetDirection() * MOVEMENT_SPEED_METERS_PER_SECOND;
+            _physics.SetHorizontalVelocity(player.Body, velocity.X, velocity.Z);
+        }
+
+        _physics.Step(deltaTimeSeconds);
+        bool changed = false;
+        foreach ((WorldAdmission admission, WorldPlayer player) in _players)
+        {
+            if (admission.IsDeparted || admission.Session.IsDisconnected)
             {
                 continue;
             }
 
-            Vector3 position = player.Position + direction * MOVEMENT_SPEED_METERS_PER_SECOND * deltaTimeSeconds;
-            _movementUpdates.Add((admission, player with { Position = position }));
+            Vector3 position = _physics.GetMotion(player.Body).FootPositionMeters;
+            if (position != player.State.Position)
+            {
+                player.State = player.State with { Position = position };
+                changed = true;
+            }
         }
-
-        foreach ((WorldAdmission admission, PlayerState player) in _movementUpdates)
-        {
-            _players[admission] = player;
-        }
-        return _movementUpdates.Count != 0;
+        return changed;
     }
 
     // Only the world loop performs terminal cleanup, after its last update or on failure.
@@ -156,8 +180,15 @@ public sealed class GameWorld
     {
         Commands.Complete();
         _players.Clear();
-        _movementUpdates.Clear();
+        _physics?.Dispose();
+        _physics = null;
         Volatile.Write(ref _publishedPlayers, Array.Empty<PlayerState>());
         _stopped = true;
+    }
+
+    private sealed class WorldPlayer(BodyHandle body, PlayerState state)
+    {
+        internal BodyHandle Body { get; } = body;
+        internal PlayerState State { get; set; } = state;
     }
 }

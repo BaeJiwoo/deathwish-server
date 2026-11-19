@@ -27,6 +27,7 @@ namespace DeathWish.Client
         private const float LAB_WALL_HEIGHT_METERS = 12f;
         private static readonly Color LocalAccent = new Color32(18, 78, 218, 255);
         private static readonly Color RemoteAccent = new Color32(255, 196, 24, 255);
+        private const double SNAPSHOT_BLEND_SECONDS = 0.1;
         private const int TIMEOUT_SECONDS = 5;
         private const int MAX_PORT = 65535;
 
@@ -42,6 +43,9 @@ namespace DeathWish.Client
         [SerializeField] private Text _inputText = null;
 
         private readonly Dictionary<long, Vector3> _positions = new Dictionary<long, Vector3>();
+        private readonly Dictionary<long, Vector3> _blendStarts = new Dictionary<long, Vector3>();
+        private double _blendStartSeconds;
+        private bool _hasSnapshot;
         private readonly Dictionary<long, Transform> _markers = new Dictionary<long, Transform>();
         private readonly List<long> _departedPlayers = new List<long>();
         private Transform _viewCamera;
@@ -200,9 +204,9 @@ namespace DeathWish.Client
             }
 
             WorldSnapshot snapshot = _client.LatestSnapshot;
-            if (snapshot != null && snapshot.ServerTick != _lastTick)
+            if (snapshot != null && (!_hasSnapshot || snapshot.ServerTick > _lastTick))
             {
-                ApplySnapshot(snapshot);
+                ApplySnapshot(snapshot, Time.unscaledTimeAsDouble);
             }
             RefreshTelemetry();
 
@@ -255,14 +259,32 @@ namespace DeathWish.Client
             }
         }
 
-        private void ApplySnapshot(WorldSnapshot snapshot)
+        private void ApplySnapshot(WorldSnapshot snapshot, double nowSeconds)
         {
+            // If a target arrives early, continue from the current blend to keep the path continuous.
+            float fraction = BlendFraction(nowSeconds);
+            foreach (var player in _positions)
+            {
+                _blendStarts[player.Key] = DisplayPosition(player.Key, player.Value, fraction);
+            }
             _lastTick = snapshot.ServerTick;
+            _hasSnapshot = true;
+            _blendStartSeconds = nowSeconds;
             _positions.Clear();
             foreach (SnapshotPlayer player in snapshot.Players)
             {
                 _positions.Add(player.PlayerId, new Vector3(player.X, player.Y, player.Z));
             }
+        }
+
+        private float BlendFraction(double nowSeconds)
+        {
+            return Mathf.Clamp01((float)((nowSeconds - _blendStartSeconds) / SNAPSHOT_BLEND_SECONDS));
+        }
+
+        private Vector3 DisplayPosition(long id, Vector3 target, float fraction)
+        {
+            return _blendStarts.TryGetValue(id, out Vector3 start) ? Vector3.Lerp(start, target, fraction) : target;
         }
 
         private void CreateWorldView(Shader shader, Mesh floorMesh)
@@ -275,7 +297,7 @@ namespace DeathWish.Client
 
             Vector3 meshSize = floorMesh.bounds.size;
             var floorScale = new Vector3(FLOOR_SIZE_METERS / meshSize.x, 1f, FLOOR_SIZE_METERS / meshSize.z);
-            CreateVisual("Grid floor", floorMesh, transform, Vector3.down * 0.02f, floorScale, _floorMaterial);
+            CreateVisual("Grid floor", floorMesh, transform, Vector3.zero, floorScale, _floorMaterial);
 
             Mesh panel = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
             _wallMaterial = new Material(shader);
@@ -292,6 +314,11 @@ namespace DeathWish.Client
         }
 
         private void LateUpdate()
+        {
+            RenderWorld(Time.unscaledTimeAsDouble);
+        }
+
+        private void RenderWorld(double nowSeconds)
         {
             if (_viewCamera == null)
             {
@@ -310,8 +337,10 @@ namespace DeathWish.Client
             foreach (long playerId in _departedPlayers)
             {
                 _markers.Remove(playerId);
+                _blendStarts.Remove(playerId);
             }
 
+            float fraction = BlendFraction(nowSeconds);
             foreach (var player in _positions)
             {
                 bool isLocalPlayer = player.Key == _playerId;
@@ -324,14 +353,14 @@ namespace DeathWish.Client
                     _markers.Add(player.Key, marker);
                 }
 
-                marker.position = player.Value;
+                marker.position = DisplayPosition(player.Key, player.Value, fraction);
                 if (isLocalPlayer)
                 {
                     marker.rotation = Quaternion.Euler(0f, _yawDegrees, 0f);
                 }
             }
 
-            _positions.TryGetValue(_playerId, out Vector3 position);
+            Vector3 position = _markers.TryGetValue(_playerId, out Transform localMarker) ? localMarker.position : Vector3.zero;
             Quaternion yaw = Quaternion.Euler(0f, _yawDegrees, 0f);
             Quaternion orbit = Quaternion.Euler(_pitchDegrees, _yawDegrees, 0f);
             Vector3 pivot = position + Vector3.up * CAMERA_HEIGHT_METERS;
@@ -477,10 +506,12 @@ namespace DeathWish.Client
             _isSending = false;
             _playerId = 0;
             _lastTick = 0;
+            _hasSnapshot = false;
             _sequence = 0;
             _yawDegrees = 0;
             _pitchDegrees = DEFAULT_PITCH_DEGREES;
             _positions.Clear();
+            _blendStarts.Clear();
             foreach (Transform marker in _markers.Values)
             {
                 RemoveMarker(marker);
