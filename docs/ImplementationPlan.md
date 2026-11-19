@@ -223,3 +223,13 @@ Review each unit before committing it and starting the next unit.
 - Shared DeathWish.Protocol now defines a 3-byte header (big-endian payload length and message type), PacketReader, and Echo codec. This brings basic framing forward from Stage 5; JoinAck remains in Stage 5.
 - Server and MockClient use the shared protocol. Maximum payload is 4096 bytes. Old newline clients must be updated.
 - Awaiting user review. TCP and Unity runtime verification remain pending.
+
+## PhysicsLab test map (issue #3)
+
+1. Extract the shared static triangle map from Blender — implemented, awaiting review. See [coordinate contract, reproduction and geometry checks](../maps/PhysicsLab/README.md).
+2. Register the selectable map as static Bepu geometry; verify spawn and contacts.
+3. Exercise the ramp, platform opening, walls and ring with the server player body.
+4. Render the same geometry in Unity with the Motion Lab appearance.
+5. Verify the route with two clients and run the existing flat-map regression suite.
+
+Review each unit before committing and moving to the next. Stages 2–5 depend on the Bepu server work in #2.
