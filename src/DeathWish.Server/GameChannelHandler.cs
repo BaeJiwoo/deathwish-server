@@ -43,6 +43,23 @@ public sealed class GameChannelHandler : SimpleChannelInboundHandler<IByteBuffer
         byte[] frame;
         switch (type)
         {
+            case MessageType.Jump:
+                if (payload.Length != 0)
+                {
+                    throw new InvalidDataException("Jump expects an empty payload.");
+                }
+                if (Session is not null)
+                {
+                    _rooms.GetActiveMailbox(Session.SessionId)?.EnqueueAction(null);
+                }
+                return;
+            case MessageType.CameraRay:
+                CameraRay ray = ActionCodec.DecodeRay(payload);
+                if (Session is not null)
+                {
+                    _rooms.GetActiveMailbox(Session.SessionId)?.EnqueueAction(ray);
+                }
+                return;
             case MessageType.MoveInput:
                 MoveInput input = PacketCodec.DecodeMoveInput(payload);
                 if (Session is not null)

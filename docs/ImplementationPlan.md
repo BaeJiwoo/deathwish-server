@@ -233,3 +233,7 @@ Review each unit before committing it and starting the next unit.
 5. Two clients in the lab now receive distinct nearby spawn positions and render each other in a live Unity camera check. The full connection regression suite passed. The two-client traversal route remains pending.
 
 Review each unit before committing and moving to the next. Stages 2–5 depend on the Bepu server work in #2.
+
+## Player jump and camera query
+
+Implemented for review. Space requests one grounded jump to player height. Left click queries the room from the third-person camera and returns the nearest hit to the requesting client. Review jump apex, landing, camera offset, self exclusion and replication.

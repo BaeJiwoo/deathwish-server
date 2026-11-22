@@ -23,7 +23,17 @@ public sealed class ConnectionTestClient : IDisposable
     private readonly TaskCompletionSource<JoinAck> _admission = new TaskCompletionSource<JoinAck>(TaskCreationOptions.RunContinuationsAsynchronously);
     private int? _acceptedRoom;
     private int? _requestedRoom;
-    private bool _isSendingMovement;
+    private bool _isSendingInput;
+    private const int MAX_RAYCAST_RESULTS = 64;
+    private readonly System.Collections.Generic.Queue<string> _raycastResults = new System.Collections.Generic.Queue<string>();
+
+    public bool TryReadRaycastResult(out string? result)
+    {
+        lock (_sync)
+        {
+            return _raycastResults.TryDequeue(out result);
+        }
+    }
     private WorldSnapshot? _latestSnapshot;
 
     /// <summary>Returns the latest immutable full snapshot, or null before the first snapshot. Safe to read from the UI thread.</summary>
@@ -124,9 +134,17 @@ public sealed class ConnectionTestClient : IDisposable
     }
 
     /// <summary>Sends input after JoinAck without waiting for a response. Await all other sends/requests first; cancellation closes the connection.</summary>
-    public async Task SendMoveAsync(MoveInput input, CancellationToken cancellationToken)
+    public Task SendMoveAsync(MoveInput input, CancellationToken cancellationToken) =>
+        SendInputAsync(PacketCodec.EncodeMoveInput(input), cancellationToken);
+
+    public Task SendJumpAsync(CancellationToken cancellationToken) =>
+        SendInputAsync(ActionCodec.EncodeJump(), cancellationToken);
+
+    public Task SendRayAsync(CameraRay ray, CancellationToken cancellationToken) =>
+        SendInputAsync(ActionCodec.EncodeRay(ray), cancellationToken);
+
+    private async Task SendInputAsync(byte[] frame, CancellationToken cancellationToken)
     {
-        byte[] frame = PacketCodec.EncodeMoveInput(input);
         cancellationToken.ThrowIfCancellationRequested();
         lock (_sync)
         {
@@ -138,11 +156,11 @@ public sealed class ConnectionTestClient : IDisposable
             {
                 throw new InvalidOperationException("Wait for world admission before sending movement.");
             }
-            if (_pendingResponse != null || _isSendingMovement)
+            if (_pendingResponse != null || _isSendingInput)
             {
                 throw new InvalidOperationException("A send or request is already pending.");
             }
-            _isSendingMovement = true;
+            _isSendingInput = true;
         }
 
         using (cancellationToken.Register(() => Close(new OperationCanceledException(cancellationToken))))
@@ -162,7 +180,7 @@ public sealed class ConnectionTestClient : IDisposable
             {
                 lock (_sync)
                 {
-                    _isSendingMovement = false;
+                    _isSendingInput = false;
                 }
             }
         }
@@ -178,7 +196,7 @@ public sealed class ConnectionTestClient : IDisposable
         {
             if (_closed) throw new IOException("Connection is closed.", _disconnectError);
             if (!_connected) throw new InvalidOperationException("Connect before sending a request.");
-            if (_pendingResponse != null || _isSendingMovement)
+            if (_pendingResponse != null || _isSendingInput)
             {
                 throw new InvalidOperationException("A send or request is already pending.");
             }
@@ -235,6 +253,15 @@ public sealed class ConnectionTestClient : IDisposable
                 {
                     lock (_sync)
                     {
+                        if (type == MessageType.RaycastResult)
+                        {
+                            if (_admission.Task.Status != TaskStatus.RanToCompletion || _raycastResults.Count >= MAX_RAYCAST_RESULTS)
+                            {
+                                throw new InvalidDataException("Unexpected raycast result.");
+                            }
+                            _raycastResults.Enqueue(PacketCodec.DecodeEcho(payload));
+                            return;
+                        }
                         if (type == MessageType.WorldSnapshot)
                         {
                             WorldSnapshot snapshot = SnapshotCodec.Decode(payload);
