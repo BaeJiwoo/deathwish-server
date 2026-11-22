@@ -1,5 +1,7 @@
 # DeathWish
 
+**게임 서버** · [Unity 클라이언트](https://github.com/BaeJiwoo/deathwish-client) · [게임 에셋](https://github.com/BaeJiwoo/deathwish-assets)
+
 **Server-Authoritative 방식의 FPS 데스매치 게임 서버 개발 프로젝트입니다.**
 
 이 저장소에서는 C# 게임 서버를 개발합니다. Unity PC 클라이언트는 별도 프로젝트에서 개발하며, 바이너리 패킷 명세에 따라 서버와 통신합니다.
@@ -17,7 +19,6 @@
 | 연동 클라이언트 | Unity PC 클라이언트, 별도 프로젝트 |
 | 향후 검토 기술 | ASP.NET Core, MySQL, Redis |
 | 프로젝트 목표 | Server-Authoritative 슈팅 게임 시스템 구축 |
-| 저장소 | [게임 서버](https://github.com/BaeJiwoo/deathwish-server) · [Unity 클라이언트](https://github.com/BaeJiwoo/deathwish-client) |
 
 ## 1. 서버 실행
 
