@@ -10,7 +10,7 @@ The server and MockClient share `DeathWish.Protocol` (.NET Standard 2.1). This r
 | 2 | 1 byte | Message type |
 | 3 | N bytes | Payload |
 
-Maximum payload length is 4096 bytes for messages 1–6. WorldSnapshot (7) permits up to 20,494 bytes for 1,024 players; this exception applies only to server-to-client snapshots. The inbound server length decoder remains limited to 4,099-byte frames. A complete frame is 3 + N bytes. Zero-length payloads are valid. Header and payload may arrive across multiple reads; one read may contain multiple frames. Each connection owns a PacketReader. Completed payload arrays belong to the recipient.
+Maximum payload length is 4096 bytes for messages other than WorldSnapshot. WorldSnapshot (7) permits up to 20,494 bytes for 1,024 players; this exception applies only to server-to-client snapshots. The inbound server length decoder remains limited to 4,099-byte frames. A complete frame is 3 + N bytes. Zero-length payloads are valid. Header and payload may arrive across multiple reads; one read may contain multiple frames. Each connection owns a PacketReader. Completed payload arrays belong to the recipient.
 
 ## Message types
 
@@ -23,6 +23,11 @@ Maximum payload length is 4096 bytes for messages 1–6. WorldSnapshot (7) permi
 | 5 | JoinAck | Server to client | RoomId, PlayerId, ServerTick, spawn X/Y/Z |
 | 6 | MoveInput | Client to server | Sequence: uint32; direction X/Z: float32 |
 | 7 | WorldSnapshot | Server to client | RoomId, ServerTick, player count, complete player states |
+| 8 | Jump | Client to server | Empty payload. One Space press |
+| 9 | CameraRay | Client to server | Six big-endian float32 values. Camera offset XYZ in world axes from rendered feet (meters), then unit forward XYZ |
+| 10 | RaycastResult | Server to requesting client | UTF-8 text with hit kind, player ID when applicable, world point and distance in meters, or a miss |
+
+The server processes one queued action per player per fixed tick in arrival order. A grounded jump applies an upward impulse targeting a 1.8 m rise under positive room gravity. The server casts up to 100 m from the authoritative foot position plus camera offset (maximum 8 m), excluding the requesting body.
 
 Example request for `Hi`: `00 02 01 48 69`. Response: `00 02 02 48 69`.
 LF, CR, and NUL are valid payload characters. Unknown types, incorrect direction, invalid UTF-8, or oversized lengths close the connection. Oversized lengths are rejected after reading the header, before allocating the body. Incomplete frames at disconnect are discarded; the client reports truncated responses as errors.

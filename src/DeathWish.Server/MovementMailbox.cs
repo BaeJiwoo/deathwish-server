@@ -9,6 +9,9 @@ internal sealed class MovementMailbox
 
     private readonly object _sync = new();
     private readonly TimeProvider _timeProvider;
+    private const int MAX_PENDING_ACTIONS = 16;
+    // A null ray represents one jump press.
+    private readonly Queue<CameraRay?> _actions = new();
     private MoveInput _latest;
     private long _receivedTimestamp;
     private bool _hasInput;
@@ -58,11 +61,36 @@ internal sealed class MovementMailbox
         }
     }
 
+    internal void EnqueueAction(CameraRay? ray)
+    {
+        lock (_sync)
+        {
+            if (_isClosed)
+            {
+                return;
+            }
+            if (_actions.Count >= MAX_PENDING_ACTIONS)
+            {
+                throw new InvalidDataException("Too many pending player actions.");
+            }
+            _actions.Enqueue(ray);
+        }
+    }
+
+    internal bool TryTakeAction(out CameraRay? ray)
+    {
+        lock (_sync)
+        {
+            return _actions.TryDequeue(out ray);
+        }
+    }
+
     internal void Close()
     {
         lock (_sync)
         {
             _isClosed = true;
+            _actions.Clear();
             _hasInput = false;
             _latest = default;
         }

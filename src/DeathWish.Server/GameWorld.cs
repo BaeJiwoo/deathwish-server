@@ -216,6 +216,23 @@ public sealed class GameWorld
 
             Vector3 velocity = admission.Movement.GetDirection() * MOVEMENT_SPEED_METERS_PER_SECOND;
             _physics.SetHorizontalVelocity(player.Body, velocity.X, velocity.Z);
+            if (player.IsJumping && _physics.GetMotion(player.Body).VerticalVelocityMetersPerSecond <= 0 &&
+                _physics.HasGroundSupport(player.Body))
+            {
+                player.IsJumping = false;
+            }
+            if (admission.Movement.TryTakeAction(out CameraRay? ray))
+            {
+                if (ray.HasValue)
+                {
+                    SendRaycastResult(admission.Session, player.Body, ray.Value);
+                }
+                else if (!player.IsJumping && _gravityMetersPerSecondSquared > 0 && _physics.HasGroundSupport(player.Body))
+                {
+                    _physics.ApplyJumpImpulse(player.Body, _gravityMetersPerSecondSquared, deltaTimeSeconds);
+                    player.IsJumping = true;
+                }
+            }
         }
 
         _physics.Step(deltaTimeSeconds);
@@ -237,6 +254,21 @@ public sealed class GameWorld
         return changed;
     }
 
+    private void SendRaycastResult(ClientSession session, BodyHandle player, CameraRay ray)
+    {
+        var (target, distance, point) = _physics!.CastCameraRay(player, ray);
+        string result = "Raycast miss";
+        if (target.HasValue)
+        {
+            var hit = target.Value;
+            string name = hit.Mobility == BepuPhysics.Collidables.CollidableMobility.Static
+                ? "terrain"
+                : $"player {_players.Values.First(other => other.Body == hit.BodyHandle).State.PlayerId}";
+            result = FormattableString.Invariant($"Raycast hit {name} at ({point.X:F2}, {point.Y:F2}, {point.Z:F2}), {distance:F2} m");
+        }
+        session.Send(ActionCodec.EncodeResult(result));
+    }
+
     // Only the world loop performs terminal cleanup, after its last update or on failure.
     internal void Shutdown()
     {
@@ -250,6 +282,7 @@ public sealed class GameWorld
 
     private sealed class WorldPlayer(BodyHandle body, PlayerState state)
     {
+        internal bool IsJumping { get; set; }
         internal BodyHandle Body { get; } = body;
         internal PlayerState State { get; set; } = state;
     }

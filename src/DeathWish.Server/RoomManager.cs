@@ -66,15 +66,20 @@ public sealed class RoomManager
     internal bool SubmitMovement(Guid sessionId, MoveInput input)
     {
         input.Validate();
+        return GetActiveMailbox(sessionId)?.TrySetInput(input) ?? false;
+    }
+
+    internal MovementMailbox? GetActiveMailbox(Guid sessionId)
+    {
         lock (_sync)
         {
             if (!_accepting || !_membership.TryGetValue(sessionId, out var membership) ||
                 membership.Admission.IsDeparted || membership.Admission.Session.IsDisconnected)
             {
-                return false;
+                return null;
             }
 
-            return membership.Admission.Movement.TrySetInput(input);
+            return membership.Admission.Movement;
         }
     }
 

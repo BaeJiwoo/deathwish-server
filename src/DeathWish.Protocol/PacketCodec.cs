@@ -13,7 +13,10 @@ public enum MessageType : byte
     JoinRoomResponse = 4,
     JoinAck = 5,
     MoveInput = 6,
-    WorldSnapshot = 7
+    WorldSnapshot = 7,
+    Jump = 8,
+    CameraRay = 9,
+    RaycastResult = 10
 }
 
 public static class PacketCodec
@@ -181,7 +184,8 @@ public static class PacketCodec
     {
         if (type != MessageType.EchoRequest && type != MessageType.EchoResponse &&
             type != MessageType.JoinRoomRequest && type != MessageType.JoinRoomResponse && type != MessageType.JoinAck &&
-            type != MessageType.MoveInput && type != MessageType.WorldSnapshot)
+            type != MessageType.MoveInput && type != MessageType.WorldSnapshot && type != MessageType.Jump &&
+            type != MessageType.CameraRay && type != MessageType.RaycastResult)
             throw new InvalidDataException("Unknown message type.");
     }
 }

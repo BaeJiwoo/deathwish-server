@@ -1,6 +1,7 @@
 using System.Numerics;
 using BepuPhysics;
 using BepuPhysics.Collidables;
+using BepuPhysics.Trees;
 using BepuUtilities.Memory;
 
 namespace DeathWish.Server.Physics;
@@ -16,6 +17,18 @@ internal sealed class PlayerPhysicsSimulation : IDisposable
     private const int SOLVER_ITERATIONS = 8;
     private const int SUBSTEPS = 4;
     private const float DISABLED_SLEEP_THRESHOLD = -1;
+
+    internal const float RAY_RANGE_METERS = 100f;
+    private const float GROUND_PROBE_START_METERS = 0.12f;
+    private const float GROUND_TOLERANCE_METERS = 0.035f;
+    private const float MIN_SUPPORT_NORMAL_Y = 0.6f;
+    private const float SOLE_X = PLAYER_WIDTH_METERS / 2 - FOOT_BEVEL_INSET_METERS;
+    private const float SOLE_Z = PLAYER_DEPTH_METERS / 2 - FOOT_BEVEL_INSET_METERS;
+    private static readonly Vector3[] SupportOffsets =
+    [
+        Vector3.Zero, new(-SOLE_X, 0, -SOLE_Z), new(-SOLE_X, 0, SOLE_Z),
+        new(SOLE_X, 0, -SOLE_Z), new(SOLE_X, 0, SOLE_Z)
+    ];
 
     private readonly BufferPool _pool = new();
     private readonly Simulation _simulation;
@@ -54,6 +67,63 @@ internal sealed class PlayerPhysicsSimulation : IDisposable
         BodyReference body = _simulation.Bodies.GetBodyReference(handle);
         body.Velocity.Linear.X = xMetersPerSecond;
         body.Velocity.Linear.Z = zMetersPerSecond;
+    }
+
+    internal bool HasGroundSupport(BodyHandle player)
+    {
+        Vector3 foot = GetMotion(player).FootPositionMeters;
+        foreach (Vector3 offset in SupportOffsets)
+        {
+            Vector3 start = foot + offset + Vector3.UnitY * GROUND_PROBE_START_METERS;
+            var query = new ClosestHit(player, groundOnly: true);
+            _simulation.RayCast(start, -Vector3.UnitY, GROUND_PROBE_START_METERS + GROUND_TOLERANCE_METERS, ref query);
+            if (query.Hit.HasValue)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    internal void ApplyJumpImpulse(BodyHandle player, float gravityMetersPerSecondSquared, float deltaTimeSeconds)
+    {
+        BodyReference body = _simulation.Bodies.GetBodyReference(player);
+        // Account for the first velocity integration in the discrete ballistic trajectory.
+        float launchSpeed = MathF.Sqrt(2 * gravityMetersPerSecondSquared * PLAYER_HEIGHT_METERS);
+        float deltaSpeed = launchSpeed + gravityMetersPerSecondSquared * deltaTimeSeconds / 2 - body.Velocity.Linear.Y;
+        body.ApplyLinearImpulse(Vector3.UnitY * (deltaSpeed / body.LocalInertia.InverseMass));
+    }
+
+    internal (CollidableReference? Target, float Distance, Vector3 Point) CastCameraRay(
+        BodyHandle player, DeathWish.Protocol.CameraRay ray)
+    {
+        Vector3 origin = GetMotion(player).FootPositionMeters + ray.Offset;
+        var query = new ClosestHit(player, groundOnly: false);
+        _simulation.RayCast(origin, ray.Direction, RAY_RANGE_METERS, ref query);
+        return (query.Hit, query.Distance, origin + ray.Direction * query.Distance);
+    }
+
+    private struct ClosestHit(BodyHandle player, bool groundOnly) : IRayHitHandler
+    {
+        internal CollidableReference? Hit;
+        internal float Distance;
+
+        public bool AllowTest(CollidableReference collidable) =>
+            collidable.Mobility == CollidableMobility.Static || (!groundOnly && collidable.BodyHandle != player);
+
+        public bool AllowTest(CollidableReference collidable, int childIndex) => AllowTest(collidable);
+
+        public void OnRayHit(in RayData ray, ref float maximumT, float t, in Vector3 normal,
+            CollidableReference collidable, int childIndex)
+        {
+            if (groundOnly && normal.Y < MIN_SUPPORT_NORMAL_Y)
+            {
+                return;
+            }
+            maximumT = t;
+            Distance = t;
+            Hit = collidable;
+        }
     }
 
     public void Step(float deltaTimeSeconds)

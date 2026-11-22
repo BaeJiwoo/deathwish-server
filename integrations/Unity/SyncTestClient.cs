@@ -71,6 +71,9 @@ namespace DeathWish.Client
         private float _nextInputSeconds;
         private bool _isConnecting;
         private bool _isSending;
+        private int _captureFrame;
+        private const int MAX_BUFFERED_ACTIONS = 16;
+        private readonly Queue<CameraRay?> _actions = new Queue<CameraRay?>();
         private bool _hasFocus;
         private bool _isConfigured;
         private int _generation;
@@ -216,10 +219,15 @@ namespace DeathWish.Client
             {
                 ApplySnapshot(snapshot, Time.unscaledTimeAsDouble);
             }
+            while (_client.TryReadRaycastResult(out string result))
+            {
+                _statusText.text = _status = result;
+                Debug.Log(result);
+            }
             RefreshTelemetry();
 
             // A synchronous send failure can disconnect. Do not read connection state afterward.
-            if (!_isSending && Time.unscaledTime >= _nextInputSeconds)
+            if (!_isSending && (Time.unscaledTime >= _nextInputSeconds || _actions.Count > 0))
             {
                 float strafe = canControl ? Axis(KeyCode.D, KeyCode.A) : 0;
                 float forward = canControl ? Axis(KeyCode.W, KeyCode.S) : 0;
@@ -246,7 +254,20 @@ namespace DeathWish.Client
                 using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token))
                 {
                     timeout.CancelAfter(TimeSpan.FromSeconds(TIMEOUT_SECONDS));
+                    bool hasAction = _actions.Count > 0;
+                    CameraRay? ray = hasAction ? _actions.Dequeue() : null;
                     await client.SendMoveAsync(input, timeout.Token);
+                    if (hasAction && generation == _generation)
+                    {
+                        if (ray.HasValue)
+                        {
+                            await client.SendRayAsync(ray.Value, timeout.Token);
+                        }
+                        else
+                        {
+                            await client.SendJumpAsync(timeout.Token);
+                        }
+                    }
                 }
             }
             catch (Exception error)
@@ -388,6 +409,24 @@ namespace DeathWish.Client
         private void LateUpdate()
         {
             RenderWorld(Time.unscaledTimeAsDouble);
+            if (_playerId == 0 || !_hasFocus || Cursor.lockState != CursorLockMode.Locked ||
+                Time.frameCount == _captureFrame)
+            {
+                return;
+            }
+
+            if (Input.GetKeyDown(KeyCode.Space) && _actions.Count < MAX_BUFFERED_ACTIONS)
+            {
+                _actions.Enqueue(null);
+            }
+            if (Input.GetMouseButtonDown(0) && _actions.Count < MAX_BUFFERED_ACTIONS &&
+                _viewCamera != null && _markers.TryGetValue(_playerId, out Transform marker))
+            {
+                Vector3 offset = _viewCamera.position - marker.position;
+                Vector3 forward = _viewCamera.forward;
+                _actions.Enqueue(new CameraRay(new System.Numerics.Vector3(offset.x, offset.y, offset.z),
+                    new System.Numerics.Vector3(forward.x, forward.y, forward.z)));
+            }
         }
 
         private void RenderWorld(double nowSeconds)
@@ -474,6 +513,7 @@ namespace DeathWish.Client
             }
 
             UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null);
+            _captureFrame = Time.frameCount;
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
             _nextInputSeconds = 0;
@@ -511,7 +551,7 @@ namespace DeathWish.Client
                 : "My server position (m)\nX: --    Y: --    Z: --";
             bool canControl = _hasFocus && Cursor.lockState == CursorLockMode.Locked && _playerId != 0;
             _inputText.text = string.Format(CultureInfo.InvariantCulture, "Input: {0}    Yaw: {1:F1} deg",
-                canControl ? "WASD / Mouse look / Esc releases" : "Released", _yawDegrees);
+                canControl ? "WASD / Space jump / LMB ray / Esc" : "Released", _yawDegrees);
         }
 
         private void OnDrawGizmos()
@@ -549,6 +589,7 @@ namespace DeathWish.Client
 
         private void ReleaseInput()
         {
+            _actions.Clear();
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
             _nextInputSeconds = 0;
