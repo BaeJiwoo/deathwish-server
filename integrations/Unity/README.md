@@ -1,21 +1,25 @@
-# SyncTestScene and WASD test
+# Unity integration and SyncTestScene
 
-The server owns all positions. Clients send directions at about 30 Hz; the server moves at up to 5 m/s and sends full snapshots at 10 Hz (capped by the world tick rate). Physics, collision, jumping, client prediction and reconciliation are intentionally absent.
+The server owns movement, gravity, collisions, jumps and raycasts. The Unity client renders server snapshots, captures input and displays the result of each camera raycast. For the complete local run with the server, MockClient and Unity, follow the [server README](../../README.md).
 
 ## Console
 
-Run from the DeathWish repository in separate terminals:
+From the server repository root, run the server in one PowerShell window and the MockClient launcher in another.
 
 ```powershell
-dotnet run --project src/DeathWish.Server
-dotnet run --project mockclient/DeathWish.MockClient.Console
+$env:SERVER_ROOM_COUNT = '2'
+dotnet run --project src/DeathWish.Server -- 127.0.0.1 17779
 ```
 
-Enter `/join 1`, then `/wasd`. Hold W/A/S/D to move, use Left/Right arrows to turn the movement basis, and press Esc to return to commands. Server tick, local position and player count appear in the console. Releasing keys sends zero input; losing foreground focus sends zero input. `/wasd` requires a visible standalone Windows Console Host window; VS Code and Windows Terminal tabs are deliberately rejected because their top-level window does not identify the focused terminal. Use `powershell -ExecutionPolicy Bypass -File .\mockclient\Start-MockClient.ps1` to launch a supported interactive window; `/move x z` remains available on other systems. The console provides coordinates rather than a 3D view or mouse capture.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\mockclient\Start-MockClient.ps1 -Port 17779
+```
+
+In the new Console Host window, enter `/join 2`, then `/wasd`. Hold WASD to move, use the Left/Right arrows to turn, and press Esc to return to commands. For command mode in a VS Code terminal or on Linux, run `dotnet run --project mockclient/DeathWish.MockClient.Console -- 127.0.0.1 17779`, then use `/join 2` and `/move 1 0`.
 
 ## Unity installation
 
-Run this command locally from the DeathWish repository with Unity closed. It repairs the package manifest first and updates the integration. The previous movement screen in the sibling project is replaced by the supplied scene when you install this revision:
+The matching Unity client revision already contains the scene, controller and DLLs. To update an older Unity project, close the editor and run this command from the server repository root. The example assumes the client is a sibling directory.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\integrations\Unity\Install.ps1 -UnityProject ..\deathwish-client
@@ -25,19 +29,21 @@ The installer builds and copies the .NET Standard 2.1 protocol/Core assemblies, 
 
 Keep Active Input Handling set to **Input Manager (Old)** or **Both**. The client uses the existing Mouse X/Y axes, and Canvas navigation uses Horizontal, Vertical, Submit and Cancel. The installer removes the old invalid `com.unity.modules.inputlegacy` reference. Do not import duplicate protocol/Core source or assemblies elsewhere in Assets.
 
+The scene tracked in the client repository starts with port `17779`. On first installation into another project, the server's scene template starts with `7777`. Enter the port printed by the running server before connecting.
+
 ## Scene and controls
 
 Open **Assets/DeathWishMovement/Scenes/SyncTestScene.unity** before entering Play mode. Opening an arbitrary empty scene no longer creates a test screen. The supplied scene already contains a Camera, Canvas, EventSystem and SyncTestController. Canvas text, input fields, buttons, serialized controller references and button events can be edited in the Inspector before Play; there is no runtime or editor scene/UI factory.
 
-1. In Game view, set host/port/room and click **Connect and join**.
+1. For the server example above, enter host `127.0.0.1`, port `17779` and room `2` in Game view. Click **Connect and join**.
 2. Read **My server position (m)**, Player ID, Tick and Players on the Canvas. Before admission, position is `--`.
-3. The Game view shows the blue local capsule and yellow remote capsules in a white motion lab. The marked platform matches the server's 100 m × 100 m floor at Y = 0. Walk past an edge until the capsule loses support to see its Y coordinate decrease. The camera follows the local capsule during the fall.
-4. Click **Capture input** in Game view. Mouse X/Y orbits the camera, and WASD moves relative to its horizontal heading. Esc or focus loss releases input and stops horizontal movement while a fall continues.
+3. The Game view shows the local capsule in blue and remote players in yellow. With two rooms configured, room 2 loads the PhysicsLab terrain and room 1 loads the flat map.
+4. Click **Capture input**. Move with WASD, orbit the camera with the mouse and jump with Space while grounded. Left-click to send a camera ray. Read the server's hit or miss in the status panel and Unity Console. Esc or focus loss releases input.
 5. Enable **Gizmos** in Scene view to see ID and coordinate labels for the same snapshot. The Game view blends local and remote positions toward the latest snapshot over 100 ms. The camera follows the blended local marker. The coordinate label and Scene gizmos show the latest authoritative sample.
 
 Add the scene to your build profile if building a standalone client. Scene-view Gizmos are editor-only.
 
-For a two-player check, join room 1 from Unity and Console, move Console away from the common spawn, and look for the yellow capsule in Game view. Pan with the mouse if needed. Disconnect Console and verify that the capsule disappears and Players drops. See [the server test guide](../../docs/Testing.md) for the full sequence.
+For a two-player check, join room 2 from both clients and move the console player. Watch the yellow capsule in Unity, then disconnect the console and verify that the capsule disappears and Players drops. See [the server test guide](../../docs/Testing.md) for the full sequence.
 
 ## Project will not open: manifest repair
 
@@ -61,7 +67,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Verify-UnityInstall.
 
 The Unity compile check references installed Unity 6000.3.11f1 engine/editor assemblies and the uGUI assembly supplied in its 3D template cache. Override `-p:UnityEditorRoot="C:/.../Editor"` and `-p:UnityUiAssembly="C:/.../UnityEngine.UI.dll"` for another installation. It compiles the editor Gizmo code too, but does not establish Play-mode success. The installer regression verifies scene preservation, old-script migration, BOM-safe manifests and actual installed package metadata. ConnectionTests exits 2 when the environment blocks TCP, so an in-memory pass does not establish network success.
 
-The scene was imported and run in Unity 6000.3.11f1 in a disposable project. Scene validation passed for the Canvas and its references, fonts and button events. In Play mode, synthetic snapshots verified player colors and positions, camera framing, follow and orbit, telemetry, remote departure and disconnect cleanup. The Game view showed both capsules over the grid. Live network movement and standalone builds remain unverified, and the original sibling project still needs the updated installer.
+Earlier scene checks in a disposable Unity 6000.3.11f1 project covered Canvas references, button events and synthetic snapshot display. The jump and raycast revision passed the Unity compile check and in-memory server tests. Live input over TCP and standalone builds still require separate verification.
 
 To repeat the scene checks in a disposable installed project, copy `tests/UnitySceneChecks/Editor/SyncSceneValidation.cs` into that project's `Assets/Editor` directory. Run **DeathWish > Validate Sync Test Scene** before Play, then **DeathWish > Validate Snapshot Display (Play Mode)** while playing. The second command injects sample state without a server; use it without a live connection, then stop Play before normal network testing. This helper is not included by the production installer.
 

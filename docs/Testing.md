@@ -4,17 +4,13 @@ Windows의 VS Code와 Unity에서 DeathWish 서버를 수동으로 확인하는 
 
 ## 1. 준비
 
-- VS Code에서 `C:\Users\gunwo\Projects\DeathWish` 폴더를 엽니다.
+- VS Code에서 `src/DeathWish.Server`와 `mockclient`가 들어 있는 서버 저장소 루트를 엽니다.
 - **터미널 → 새 터미널**에서 PowerShell 터미널을 만듭니다. 모든 실행 명령은 저장소 루트 기준입니다.
 - .NET 10 SDK가 필요합니다. `dotnet --list-sdks`로 `10.0.x` 설치 여부를 확인합니다.
-- Unity 프로젝트는 `C:\Users\gunwo\Projects\deathwish-client`이며, 확인한 에디터 버전은 `6000.3.11f1`입니다.
+- Unity Hub에서 별도 저장소 `deathwish-client` 루트를 에디터 `6000.3.11f1`로 엽니다. 점프·레이캐스트를 테스트할 때는 서버와 클라이언트 모두 `feat/jump-and-raycast` 버전을 사용합니다.
 - 이 파일을 연 뒤 `Ctrl+Shift+V`를 누르면 Markdown 미리보기를 볼 수 있습니다.
 
-```powershell
-Set-Location C:\Users\gunwo\Projects\DeathWish
-```
-
-Unity의 `SyncTestScene`은 미리 배치된 Canvas와 3인칭 카메라를 사용합니다. 업데이트하려면 Unity를 종료하고 9절의 설치 명령을 실행한 뒤 씬을 여세요. 실제 서버 접속과 이동 동기화는 아래 절차로 확인합니다.
+Unity의 `SyncTestScene`은 미리 배치된 Canvas와 3인칭 카메라를 사용합니다. 호환되는 클라이언트에는 DLL과 씬이 포함되어 있습니다. 예전 프로젝트의 연동 파일을 갱신할 때는 9절의 설치 명령을 사용합니다. 서버 설치기로 씬을 처음 생성한 경우 Port 초기값이 `7777`이므로 이 가이드에서는 `17779`로 바꿉니다.
 
 ## 2. 서버 실행 — 터미널 A
 
@@ -23,19 +19,19 @@ Unity의 `SyncTestScene`은 미리 배치된 Canvas와 3인칭 카메라를 사�
 ```powershell
 $env:SERVER_ROOM_COUNT = '2'
 $env:SERVER_TICK_RATE = '30'
-dotnet run --project src/DeathWish.Server -- 127.0.0.1 7777
+dotnet run --project src/DeathWish.Server -- 127.0.0.1 17779
 ```
 
 정상적으로 실행되면 다음 로그가 나옵니다. 서버 터미널은 그대로 실행해 둡니다.
 
 ```text
-Listening on 127.0.0.1:7777. Rooms: 2. Tick rate: 30 Hz. Press Ctrl+C to stop.
+Listening on [::ffff:127.0.0.1]:17779. Rooms: 2. Tick rate: 30 Hz. Press Ctrl+C to stop.
 ```
 
 | 항목 | 이 가이드의 테스트 설정 |
 | --- | --- |
-| 접속 주소 | `127.0.0.1:7777` |
-| 사용 가능한 방 | `1`, `2` |
+| 접속 주소 | `127.0.0.1:17779` (씬의 초기값). 서버 기본 포트 `7777` 사용 시 두 클라이언트도 변경 |
+| 사용 가능한 방 | `1` 평면 맵, `2` PhysicsLab |
 | 월드 갱신 | 초당 30회 |
 | 전체 플레이어 스냅숏 전송 | 초당 10회 |
 | 최대 이동 속도 | 초당 5m |
@@ -48,14 +44,14 @@ Listening on 127.0.0.1:7777. Rooms: 2. Tick rate: 30 Hz. Press Ctrl+C to stop.
 VS Code에서 두 번째 PowerShell 터미널을 열고 실행합니다.
 
 ```powershell
-dotnet run --project mockclient/DeathWish.MockClient.Console -- 127.0.0.1 7777
+dotnet run --project mockclient/DeathWish.MockClient.Console -- 127.0.0.1 17779
 ```
 
 `Connected.`가 나오면 **아래 내용은 PowerShell 명령이 아니라 실행 중인 MockClient에 입력**합니다. 한 줄씩 입력하고 Enter를 누릅니다.
 
 ```text
 hello
-/join 1
+/join 2
 ```
 
 예상 결과입니다. PlayerId와 ServerTick은 실행마다 달라질 수 있습니다.
@@ -64,12 +60,12 @@ hello
 Sent: hello
 Received: hello
 Echo PASS
-Join room 1: Success
-World ready: PlayerId=..., ServerTick=..., Spawn=(0, 0, 0)
+Join room 2: Success
+World ready: PlayerId=..., ServerTick=..., Spawn=(..., ..., ...)
 ```
 
 - `Connected.`는 TCP 연결 성공입니다.
-- `Join room 1: Success` 다음에 `World ready`까지 나와야 월드 입장이 완료된 것입니다.
+- `Join room 2: Success` 다음에 `World ready`까지 나와야 월드 입장이 완료된 것입니다.
 - Echo는 보낸 클라이언트에게만 돌아옵니다. 다른 클라이언트에게 전달하는 채팅 기능은 아닙니다.
 - 이 클라이언트는 `/quit`을 입력해 종료합니다. 다음 단계에서 별도 창으로 다시 실행합니다.
 
@@ -77,16 +73,16 @@ World ready: PlayerId=..., ServerTick=..., Spawn=(0, 0, 0)
 
 **`/wasd`는 VS Code 통합 터미널과 Windows Terminal 탭에서 지원하지 않습니다.** 입력 포커스를 정확히 구분하기 위해 독립된 Windows Console Host 창을 사용합니다.
 
-VS Code의 터미널 B에서 아래 명령으로 지원되는 창을 엽니다. 런처는 기본 주소 `127.0.0.1:7777`로 접속합니다.
+VS Code의 터미널 B에서 아래 명령으로 독립 콘솔을 엽니다. 런처는 로컬 호스트에 접속하며, 이 예제에서는 포트를 `17779`로 지정합니다.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\mockclient\Start-MockClient.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\mockclient\Start-MockClient.ps1 -Port 17779
 ```
 
 새 콘솔 창에서 한 줄씩 입력합니다.
 
 ```text
-/join 1
+/join 2
 /wasd
 ```
 
@@ -116,37 +112,38 @@ Tick ...: (X, Y, Z)  Players=1  Yaw=...
 3. **Connect and join**을 누릅니다.
 4. 접속 메시지와 증가하는 Tick, **My server position (m)**의 X/Y/Z를 확인합니다.
 5. Game 뷰에서 **Capture input**을 누릅니다. 마우스로 시점을 회전하고 WASD로 시점 기준 이동을 합니다.
-6. Esc를 눌러 마우스를 해제하고 이동이 멈추는지 확인합니다.
+6. 지면에서 Space를 눌러 **My server position (m)**의 Y가 상승한 뒤 착지하는지 봅니다. 좌클릭하면 상태창과 Unity Console에 지형·플레이어 명중 위치와 거리 또는 `Raycast miss`가 출력됩니다. 이 두 입력은 Unity에서 확인합니다.
+7. Esc를 눌러 마우스를 해제하고 이동이 멈추는지 확인합니다.
 
 | UI 항목 | 입력값 |
 | --- | --- |
 | Host | `127.0.0.1` |
-| Port | `7777` |
-| Room | `1` |
+| Port | `17779` |
+| Room | `2` |
 
 정상 결과:
 
-- Game 뷰에는 초록색 본인 캡슐과 청록색 상대 캡슐, 격자 바닥이 표시됩니다. **My server position (m)**에는 본인의 서버 좌표가 나옵니다.
-- Scene 뷰에서 본인은 초록색 `ME`, 상대는 청록색 `PLAYER` Gizmo로 표시됩니다. 각 표식에는 Player ID와 좌표가 붙습니다.
+- Game 뷰에는 파란색 본인 캡슐과 노란색 상대 캡슐이 표시됩니다. **My server position (m)**에는 본인의 서버 좌표가 나옵니다.
+- Scene 뷰에서 본인은 파란색 `ME`, 상대는 노란색 `PLAYER` Gizmo로 표시됩니다. 각 표식에는 Player ID와 좌표가 붙습니다.
 - WASD를 누르면 본인 캡슐과 좌표가 바뀌고 카메라가 뒤에서 따라갑니다. 마우스 좌우·상하로 카메라 시점이 바뀝니다.
 - Console에 새 오류가 발생하지 않습니다.
-- MockClient도 방 1에 접속해 있다면, 마우스를 해제한 UI에서 `Players: 2`가 보입니다.
+- MockClient도 방 2에 접속해 있다면, 다른 접속자가 없는 상태에서 `Players: 2`가 보입니다.
 
-플레이어 위치는 최신 서버 스냅숏을 그대로 표시합니다. 물리·충돌·점프는 포함하지 않습니다. Scene 뷰 Gizmo를 켜면 좌표와 ID를 추가로 확인할 수 있습니다.
+Game 뷰는 스냅숏 사이의 위치를 100ms에 걸쳐 보간합니다. Canvas의 좌표와 Scene 뷰의 Gizmo는 최신 서버 좌표를 표시하므로 점프 높이와 충돌 위치를 확인할 때 사용할 수 있습니다.
 
 ## 6. 두 클라이언트 동기화·방 분리
 
-Unity와 MockClient가 모두 방 1에 들어온 상태에서 진행합니다. 두 클라이언트는 같은 원점에서 시작하므로 먼저 한쪽을 이동해야 겹쳐 있는 캡슐을 구분할 수 있습니다.
+Unity와 MockClient가 모두 방 2에 들어온 상태에서 진행합니다. 서버가 각 플레이어의 스폰 위치를 배정합니다.
 
 | 순서 | 수행 방법 | 정상 결과 |
 | --- | --- | --- |
 | 1 | Unity에서 Esc로 마우스 해제 | 접속 UI에서 Players 2 확인 |
-| 2 | MockClient 창을 클릭하고 WASD 모드에서 W를 약 2초 누른 뒤 놓기 | MockClient 좌표 변경, Unity Game 뷰의 청록색 캡슐 위치 변경 |
+| 2 | MockClient 창을 클릭하고 WASD 모드에서 W를 약 2초 누른 뒤 놓기 | MockClient 좌표 변경, Unity Game 뷰의 노란색 캡슐 위치 변경 |
 | 3 | MockClient에서 이동 키를 누르다가 다른 창으로 포커스 이동 | 입력이 정지하고, 다음 스냅숏들이 반영된 뒤 상대 캡슐도 멈춤 |
 | 4 | MockClient에서 Esc, 이후 `/quit` | Unity의 상대 캡슐이 사라지고 Players 1로 변경 |
-| 5 | 런처로 MockClient를 다시 열고 `/join 1`, `/wasd` | 상대 캡슐이 다시 생기고 양쪽 Players 2 |
-| 6 | Unity에서 **Disconnect**, Room을 `2`로 바꾸고 **Connect and join** | Unity는 방 2, MockClient는 방 1에 각각 Players 1 |
-| 7 | 방 1의 MockClient 이동 | 방 2의 Unity에 해당 캡슐이 나타나지 않음 |
+| 5 | 런처로 MockClient를 다시 열고 `/join 2`, `/wasd` | 상대 캡슐이 다시 생기고 양쪽 Players 2 |
+| 6 | Unity에서 **Disconnect**, Room을 `1`로 바꾸고 **Connect and join** | Unity는 방 1, MockClient는 방 2에 각각 Players 1 |
+| 7 | 방 2의 MockClient 이동 | 방 1의 Unity에 해당 캡슐이 나타나지 않음 |
 
 한 연결에서 바로 다른 방으로 이동하는 기능은 없습니다. 방을 바꾸려면 연결을 끊고 다시 접속합니다. 두 화면의 Tick이 순간적으로 다르게 보이는 것은 수신·화면 갱신 시점 차이일 수 있습니다. 같은 틱의 스냅숏 일치 여부는 자동 테스트에서도 검사합니다.
 
@@ -204,9 +201,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Verify-UnityInstall.
 | 서버 포트 바인딩 실패 | 같은 주소·포트의 서버를 중복 실행했는지 확인. 기존 서버는 해당 터미널에서 Ctrl+C로 종료 |
 | `Server configuration error` | `.env` 문법과 유효한 설정값 확인. 방 개수·틱 레이트는 양수 |
 | VS Code에서 `/wasd` 거부 | `mockclient/Start-MockClient.ps1`로 독립 콘솔 실행 |
-| Tick 0 / Players 0 유지 | TCP 연결뿐 아니라 Connect and join 또는 `/join 1`의 월드 입장까지 성공했는지 확인 |
+| Tick 0 / Players 0 유지 | Connect and join 또는 `/join 2`로 월드 입장까지 성공했는지 확인 |
 | 접속했지만 Unity에서 움직이지 않음 | Capture input 클릭, Game 뷰 포커스, Active Input Handling이 Input Manager (Old) 또는 Both인지 확인 |
-| 상대 플레이어가 보이지 않음 | 같은 방에 접속했는지 확인하고 한쪽을 원점에서 이동. 마우스로 카메라 시점을 돌리거나 Scene 뷰 Gizmos로 상대 좌표 확인 |
+| 상대 플레이어가 보이지 않음 | 같은 방에 접속했는지 확인하고 한쪽을 이동. 마우스로 카메라 시점을 돌리거나 Scene 뷰 Gizmos로 상대 좌표 확인 |
 | 빈 씬에서 UI가 나오지 않음 | `Assets/DeathWishMovement/Scenes/SyncTestScene.unity` 열기. Canvas와 버튼은 씬에 미리 저장되어 있음 |
 | Unity `Char: 65279` 또는 `inputlegacy` 패키지를 찾을 수 없음 | 아래 manifest 복구 명령 실행 |
 | 알 수 없는 패킷·구버전 DLL 오류 | 서버와 클라이언트를 같은 소스 버전으로 빌드하고 Unity 설치 스크립트 재실행 |
@@ -235,6 +232,8 @@ powershell -ExecutionPolicy Bypass -File .\integrations\Unity\Install.ps1 -Unity
 - [ ] Unity 씬에 Play 전부터 Canvas·입력칸·버튼이 있다.
 - [ ] Unity 접속 후 본인의 X/Y/Z, Player ID, Tick이 표시된다.
 - [ ] WASD로 위치가 바뀌고, 마우스로 시점을 돌리면 3인칭 카메라가 회전한다.
+- [ ] Unity에서 Space로 점프하면 Y가 상승했다가 착지하고, 공중에서 다시 눌러도 두 번째 점프가 발생하지 않는다.
+- [ ] Unity에서 좌클릭하면 상태창과 Unity Console에 서버의 레이캐스트 결과가 표시된다.
 - [ ] 같은 방의 두 클라이언트에 Players 2가 표시된다.
 - [ ] 상대 이동과 접속 종료가 다른 클라이언트에 반영된다.
 - [ ] 다른 방의 플레이어는 보이지 않는다.
