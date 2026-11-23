@@ -62,7 +62,7 @@ dotnet run --project mockclient/DeathWish.MockClient.Console -- 127.0.0.1 17779
 1. Unity Hub에서 별도 저장소 `deathwish-client`의 루트(`Assets`, `Packages`, `ProjectSettings`가 있는 폴더)를 **6000.3.11f1**로 엽니다. 점프·레이캐스트 확인에는 양쪽 저장소의 `feat/jump-and-raycast` 버전을 사용합니다. 이 클라이언트에는 실행에 필요한 DLL이 포함되어 있습니다.
 2. Project 창에서 `Assets/DeathWishMovement/Scenes/SyncTestScene.unity`를 열고 **Play**를 누릅니다.
 3. Game 뷰에서 Host `127.0.0.1`, Port `17779`, Room `2`를 확인하고 **Connect and join**을 누릅니다. `Connected | PhysicsLab`과 증가하는 Tick을 확인합니다.
-4. **Capture input**을 누릅니다. WASD는 이동, 마우스는 시점 회전, Space는 점프입니다. 좌클릭하면 카메라 방향의 레이캐스트 결과가 상태창과 Unity Console에 표시됩니다. Esc로 커서를 해제하고 **Disconnect**로 접속을 종료합니다.
+4. **Capture input**을 누릅니다. WASD는 이동, 마우스는 시점 회전, Space는 점프입니다. 캐릭터는 기본적으로 화면 왼쪽에 보입니다. Q 또는 설정 패널의 **Shoulder**로 좌우를 전환합니다. 중앙 조준선을 목표에 두고 좌클릭하면 판정 결과가 화면 하단과 Unity Console에 표시됩니다. Esc로 설정 패널을 다시 열고 **Disconnect**로 접속을 종료합니다.
 
 MockClient도 같은 방에 남아 있으면 Unity에 **Players: 2**가 표시됩니다. MockClient를 움직여 노란색 상대 캡슐의 이동을 확인합니다. 파란색은 본인입니다. 방 개수를 바꾸면 가장 높은 번호의 방이 PhysicsLab입니다. 서버를 기본 포트 `7777`로 기동했다면 MockClient의 포트와 Unity의 Port 입력값도 `7777`로 맞춥니다.
 

@@ -70,6 +70,8 @@ for ($attempt = 0; $attempt -lt 2; $attempt++) {
     $manifest = [IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
     if ($manifest.dependencies.'com.unity.ugui' -ne '2.0.0') { throw 'Supported Canvas package missing.' }
     foreach ($relative in @('SyncTestClient.cs', 'SyncTestClient.cs.meta', 'Scenes/SyncTestScene.unity.meta',
+        'RaycastFeedback.cs', 'RaycastFeedback.cs.meta', 'ShoulderCameraSettings.cs', 'ShoulderCameraSettings.cs.meta',
+        'Resources/ShotFeedback.shader', 'Resources/ShotFeedback.shader.meta',
         'Resources/SyncTestWorld.shader', 'Resources/SyncTestWorld.shader.meta')) {
         $sourceHash = (Get-FileHash (Join-Path $repo "integrations/Unity/$relative")).Hash
         $installedHash = (Get-FileHash "$fixture/Assets/DeathWishMovement/$relative").Hash

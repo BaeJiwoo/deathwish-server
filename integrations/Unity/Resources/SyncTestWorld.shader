@@ -6,6 +6,7 @@ Shader "DeathWish/SyncTestWorld"
         _Grid ("Grid", Float) = 0
         _Wall ("Wall panels", Float) = 0
         _FloorHalfSize ("Floor half size (m)", Float) = 50
+        _Caution ("Caution paint", Float) = 0
     }
     SubShader
     {
@@ -22,6 +23,7 @@ Shader "DeathWish/SyncTestWorld"
             float _Grid;
             float _Wall;
             float _FloorHalfSize;
+            float _Caution;
 
             struct Varyings
             {
@@ -53,6 +55,15 @@ Shader "DeathWish/SyncTestWorld"
                 float3 yellow = float3(1.0, 0.77, 0.09);
                 float3 n = normalize(input.worldNormal);
                 float2 p = input.worldPosition.xz;
+                float phase = dot(input.worldPosition, float3(1.4, 1.4, 1.4));
+                float wave = -sin(6.2831853 * phase);
+                float aa = max(0.001, 6.2831853 * fwidth(phase));
+                float stripe = smoothstep(-aa, aa, wave);
+                float3 paint = lerp(float3(0.018, 0.024, 0.03), float3(1.0, 0.74, 0.025), stripe);
+                if (_Caution > 0.5)
+                {
+                    return float4(paint, 1);
+                }
                 if (_Grid > 0.5)
                 {
                     float2 seams = abs(frac(p / 2.0 + 0.5) - 0.5) * 2.0;
@@ -64,9 +75,8 @@ Shader "DeathWish/SyncTestWorld"
                     float tick = stroke(seams.y, 0.025) * step(3.5, abs(p.x)) * step(abs(p.x), 3.73);
                     surface = lerp(surface, blue, max(ring, max(track, tick)));
                     float edge = _FloorHalfSize - max(abs(p.x), abs(p.y));
-                    float stripe = step(0.48, frac((p.x + p.y) * 1.4));
-                    float edgeBand = step(0.18, edge) * step(edge, 0.66);
-                    surface = lerp(surface, lerp(float3(0.15, 0.22, 0.30), yellow, stripe), edgeBand);
+                    float edgeBand = step(0.06, edge) * step(edge, 0.42);
+                    surface = lerp(surface, paint, edgeBand);
                     float originMark = stroke(r - 2.46, 0.06) * step(abs(p.x), 0.46);
                     return float4(lerp(surface, yellow, originMark), 1);
                 }

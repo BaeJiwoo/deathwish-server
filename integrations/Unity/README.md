@@ -38,8 +38,9 @@ Open **Assets/DeathWishMovement/Scenes/SyncTestScene.unity** before entering Pla
 1. For the server example above, enter host `127.0.0.1`, port `17779` and room `2` in Game view. Click **Connect and join**.
 2. Read **My server position (m)**, Player ID, Tick and Players on the Canvas. Before admission, position is `--`.
 3. The Game view shows the local capsule in blue and remote players in yellow. With two rooms configured, room 2 loads the PhysicsLab terrain and room 1 loads the flat map.
-4. Click **Capture input**. Move with WASD, orbit the camera with the mouse and jump with Space while grounded. Left-click to send a camera ray. Read the server's hit or miss in the status panel and Unity Console. Esc or focus loss releases input.
-5. Enable **Gizmos** in Scene view to see ID and coordinate labels for the same snapshot. The Game view blends local and remote positions toward the latest snapshot over 100 ms. The camera follows the blended local marker. The coordinate label and Scene gizmos show the latest authoritative sample.
+4. Click **Capture input**. Move with WASD, look with the mouse and jump with Space while grounded. The default right-shoulder camera places the player on the left. Press Q or click **Shoulder** in the settings panel to switch sides. Aim with the center crosshair and left-click. The server result appears below the crosshair at the bottom of the screen and in the Unity Console. Esc or focus loss restores the panel.
+5. A local shot draws a tracer after the server responds. Terrain hits flash orange and player hits flash red. A miss draws the tracer to the 100 m range limit. Enable **Gizmos** in Scene view to inspect the ray and hit point for four seconds, alongside the existing player ID and coordinate labels.
+6. Press Esc and edit **Side**, **Height** or **Back** in meters. Confirm the field with Enter or by moving focus. The settings persist and work with either shoulder. Game view follows the interpolated marker over 100 ms and shortens the camera distance near walls.
 
 Add the scene to your build profile if building a standalone client. Scene-view Gizmos are editor-only.
 

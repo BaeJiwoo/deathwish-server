@@ -24,10 +24,13 @@ namespace DeathWish.UnitySceneChecks
             Require(UnityEngine.Object.FindObjectsByType<EventSystem>(FindObjectsSortMode.None).Length == 1, "preplaced EventSystem");
             Require(Camera.main != null, "tagged main camera");
             Require(Resources.Load<Shader>("SyncTestWorld")?.isSupported == true, "supported world shader");
+            Require(Resources.Load<Shader>("ShotFeedback")?.isSupported == true, "supported shot feedback shader");
 
             var serialized = new SerializedObject(clients[0]);
             foreach (string name in new[] { "_hostInput", "_portInput", "_roomInput", "_connectButton", "_captureButton",
-                "_disconnectButton", "_statusText", "_sessionText", "_positionText", "_inputText" })
+                "_disconnectButton", "_statusText", "_sessionText", "_positionText", "_inputText",
+                "_connectionPanel", "_aimHud", "_shoulderLabel", "_aimResult", "_shoulderCamera._sideInput",
+                "_shoulderCamera._heightInput", "_shoulderCamera._distanceInput" })
             {
                 Require(serialized.FindProperty(name)?.objectReferenceValue != null, "serialized Canvas reference " + name);
             }
@@ -65,6 +68,8 @@ namespace DeathWish.UnitySceneChecks
             const BindingFlags FLAGS = BindingFlags.Instance | BindingFlags.NonPublic;
             var positions = (Dictionary<long, Vector3>)type.GetField("_positions", FLAGS).GetValue(client);
             var markers = (Dictionary<long, Transform>)type.GetField("_markers", FLAGS).GetValue(client);
+            var shoulder = type.GetField("_isLeftShoulder", FLAGS);
+            bool savedShoulder = (bool)shoulder.GetValue(client);
             Camera camera = Camera.main;
             type.GetMethod("SelectMap", FLAGS).Invoke(client, new object[] { false });
             Bounds floor = client.transform.Find("Flat map/Grid floor").GetComponent<MeshRenderer>().bounds;
@@ -93,9 +98,18 @@ namespace DeathWish.UnitySceneChecks
                 "local and remote meshes use exact server positions");
             Require(markers[1].GetComponentInChildren<MeshRenderer>().sharedMaterial.color !=
                 markers[2].GetComponentInChildren<MeshRenderer>().sharedMaterial.color, "distinct marker colors");
-            Vector3 viewportPosition = camera.WorldToViewportPoint(positions[1] + Vector3.up * 0.9f);
-            Require(viewportPosition.x > 0.57f && viewportPosition.x < 1f && viewportPosition.y > 0f &&
-                viewportPosition.y < 1f && viewportPosition.z > 0f, "local player framed to the right of the panel");
+            foreach (bool leftShoulder in new[] { false, true })
+            {
+                shoulder.SetValue(client, leftShoulder);
+                render();
+                Vector3 body = camera.WorldToViewportPoint(positions[1] + Vector3.up * 0.9f);
+                Require(body.x > 0f && body.x < 1f && (body.x > 0.5f) == leftShoulder &&
+                    body.y > 0f && body.y < 1f && body.z > 0f, "local body opposite the camera shoulder");
+                Ray aim = camera.ViewportPointToRay(new Vector3(0.5f, 0.5f));
+                Require(Vector3.Dot(aim.direction, camera.transform.forward) > 0.9999f, "centered aim");
+            }
+            shoulder.SetValue(client, savedShoulder);
+            render();
             Vector3 previousCameraPosition = camera.transform.position;
             Transform remoteMarker = markers[2];
             apply(new WorldSnapshot(1, 12, new[] { new SnapshotPlayer(1, 4.5f, -2f, 6.25f), new SnapshotPlayer(2, 8, -3, 2) }));
@@ -117,7 +131,7 @@ namespace DeathWish.UnitySceneChecks
                 new Vector3(3.25f, -2f, 8.75f)) < 0.001f, "camera follows local server movement");
             type.GetField("_yawDegrees", FLAGS).SetValue(client, 90f);
             render();
-            Require(Quaternion.Angle(camera.transform.rotation, Quaternion.Euler(22f, 90f, 0f)) < 0.1f,
+            Require(Quaternion.Angle(camera.transform.rotation, Quaternion.Euler(8f, 90f, 0f)) < 0.1f,
                 "camera orbits with mouse yaw");
             Require(positionLabel.text.Contains("X: 4.500") && positionLabel.text.Contains("Y: -2.000") &&
                 positionLabel.text.Contains("Z: 6.250"), "updated local coordinate UI");

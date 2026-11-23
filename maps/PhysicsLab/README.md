@@ -4,12 +4,14 @@
 
 ```powershell
 $blender = 'C:/Program Files/Blender Foundation/Blender 4.2/blender.exe'
-$source = '../deathwish-asset/PhysicsLab.blend'
+$source = '../deathwish-asset/Map/PhysicsLab.blend'
 & $blender --background --factory-startup --disable-autoexec $source --python-exit-code 1 --python tools/physics_lab/export_map.py -- --output maps/PhysicsLab/PhysicsLab.json
 python tools/physics_lab/verify_map.py maps/PhysicsLab/PhysicsLab.json
 ```
 
 ## 좌표와 형식
+
+Blender에서 지형 가장자리를 수정하면 에셋 저장소의 `Map/build_caution_lines.py`를 열린 맵에서 실행하고 저장한 뒤 다시 내보낸다. 스크립트는 바닥과 벽 가장자리, 경사로 및 발판 바깥과 구멍 안쪽에 폭 36cm의 경고선을 생성한다. Blender의 Material Preview와 Unity에서 같은 간격으로 노랑·검정 사선을 표시한다. JSON의 `objects`는 서버 충돌용이고 `caution`은 화면 표시용이다.
 
 - Blender 4.2.4 LTS에서 추출했다. 활성 씬의 메시 오브젝트를 이름순으로 기록하며, 각 오브젝트의 평가된 메시와 월드 변환을 사용한다.
 - 좌표는 미터 단위의 **월드 좌표**다. Blender의 `(X, Y, Z)`를 `(X, Z, Y)`로 바꾸며 씬의 단위 배율을 곱한다. 소비자는 오브젝트 변환이나 축 변환을 다시 적용하지 않는다.
