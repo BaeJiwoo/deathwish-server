@@ -5,7 +5,11 @@ static class ServerOptionsTests
     public static void Run()
     {
         const string GRAVITY_KEY = "SERVER_GRAVITY_METERS_PER_SECOND_SQUARED";
-        string[] keys = { "SERVER_ADDRESS", "SERVER_PORT", "SERVER_ROOM_COUNT", "SERVER_TICK_RATE", GRAVITY_KEY };
+        const string TDM_ROOM_KEY = "SERVER_TDM_ROOM_ID";
+        const string TDM_TEAM_SIZE_KEY = "SERVER_TDM_TEAM_SIZE";
+        const string TRAINING_ROOM_KEY = "SERVER_TRAINING_ROOM_ID";
+        string[] keys = { "SERVER_ADDRESS", "SERVER_PORT", "SERVER_ROOM_COUNT", "SERVER_TICK_RATE", GRAVITY_KEY,
+            TDM_ROOM_KEY, TDM_TEAM_SIZE_KEY, TRAINING_ROOM_KEY };
         var previous = keys.ToDictionary(key => key, Environment.GetEnvironmentVariable);
         string path = Path.Combine(Path.GetTempPath(), $"deathwish-options-{Guid.NewGuid():N}.env");
         try
@@ -13,6 +17,45 @@ static class ServerOptionsTests
             foreach (string key in keys) Environment.SetEnvironmentVariable(key, null);
             ServerOptions defaults = ServerOptionsLoader.Load(Array.Empty<string>(), path);
             Require(defaults.GravityMetersPerSecondSquared == 9.81f, "Default gravity magnitude");
+            Require(defaults.TeamDeathmatchRoomId is null, "Team deathmatch map is opt-in");
+            Require(defaults.TeamDeathmatchTeamSize == 5, "Default team deathmatch is 5v5");
+            Require(defaults.TrainingRoomId is null, "Training room is opt-in");
+            File.WriteAllText(path, $"SERVER_ROOM_COUNT=3\n{TDM_ROOM_KEY}=1");
+            Require(ServerOptionsLoader.Load([], path).TeamDeathmatchRoomId == 1, "Team deathmatch room from file");
+            Environment.SetEnvironmentVariable(TDM_ROOM_KEY, "3");
+            Require(ServerOptionsLoader.Load([], path).TeamDeathmatchRoomId == 3, "Environment overrides team deathmatch room");
+            Environment.SetEnvironmentVariable(TDM_ROOM_KEY, null);
+            foreach (string invalidRoomId in new[] { "", "0", "-1", "4", "1.5", "invalid" })
+            {
+                File.WriteAllText(path, $"SERVER_ROOM_COUNT=3\n{TDM_ROOM_KEY}={invalidRoomId}");
+                Reject<ArgumentException>(() => ServerOptionsLoader.Load([], path));
+            }
+            File.WriteAllText(path, $"{TDM_TEAM_SIZE_KEY}=1");
+            Require(ServerOptionsLoader.Load([], path).TeamDeathmatchTeamSize == 1, "Local 1v1 team size from configuration");
+            Environment.SetEnvironmentVariable(TDM_TEAM_SIZE_KEY, "4");
+            Require(ServerOptionsLoader.Load([], path).TeamDeathmatchTeamSize == 4, "Environment overrides team size");
+            Environment.SetEnvironmentVariable(TDM_TEAM_SIZE_KEY, null);
+            foreach (string invalidTeamSize in new[] { "", "0", "-1", "6", "1.5", "invalid" })
+            {
+                File.WriteAllText(path, $"{TDM_TEAM_SIZE_KEY}={invalidTeamSize}");
+                Reject<ArgumentException>(() => ServerOptionsLoader.Load([], path));
+            }
+
+            File.WriteAllText(path, $"SERVER_ROOM_COUNT=3\n{TDM_ROOM_KEY}=1\n{TRAINING_ROOM_KEY}=2");
+            ServerOptions withTraining = ServerOptionsLoader.Load([], path);
+            Require(withTraining.TrainingRoomId == 2 && withTraining.TeamDeathmatchRoomId == 1,
+                "Training and competitive rooms may coexist");
+            Environment.SetEnvironmentVariable(TRAINING_ROOM_KEY, "3");
+            Require(ServerOptionsLoader.Load([], path).TrainingRoomId == 3, "Environment overrides training room");
+            Environment.SetEnvironmentVariable(TRAINING_ROOM_KEY, "1");
+            Reject<ArgumentException>(() => ServerOptionsLoader.Load([], path));
+            Environment.SetEnvironmentVariable(TRAINING_ROOM_KEY, null);
+            foreach (string invalidTrainingRoom in new[] { "", "0", "-1", "1.5", "4", "invalid" })
+            {
+                File.WriteAllText(path, $"SERVER_ROOM_COUNT=3\n{TRAINING_ROOM_KEY}={invalidTrainingRoom}");
+                Reject<ArgumentException>(() => ServerOptionsLoader.Load([], path));
+            }
+
             File.WriteAllText(path, $"{GRAVITY_KEY}=1.25");
             Require(ServerOptionsLoader.Load([], path).GravityMetersPerSecondSquared == 1.25f, "Gravity from file");
             Environment.SetEnvironmentVariable(GRAVITY_KEY, "0");

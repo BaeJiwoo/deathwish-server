@@ -43,6 +43,30 @@ public sealed class GameChannelHandler : SimpleChannelInboundHandler<IByteBuffer
         byte[] frame;
         switch (type)
         {
+            case MessageType.LatencyReply:
+                long token = PingCodec.DecodeReply(payload);
+                if (Session is not null)
+                {
+                    _rooms.SubmitLatencyReply(Session.SessionId, token);
+                }
+                return;
+            case MessageType.Jump:
+                if (payload.Length != 0)
+                {
+                    throw new InvalidDataException("Jump expects an empty payload.");
+                }
+                if (Session is not null)
+                {
+                    _rooms.GetActiveMailbox(Session.SessionId)?.EnqueueAction(null);
+                }
+                return;
+            case MessageType.CameraRay:
+                CameraRay ray = ActionCodec.DecodeRay(payload);
+                if (Session is not null)
+                {
+                    _rooms.GetActiveMailbox(Session.SessionId)?.EnqueueAction(ray);
+                }
+                return;
             case MessageType.MoveInput:
                 MoveInput input = PacketCodec.DecodeMoveInput(payload);
                 if (Session is not null)
@@ -59,6 +83,14 @@ public sealed class GameChannelHandler : SimpleChannelInboundHandler<IByteBuffer
                 JoinRoomRequest request = PacketCodec.DecodeJoinRoomRequest(payload);
                 if (Session is null) throw new InvalidOperationException("Session is not active.");
                 Session.ReplyToJoin(_rooms, request.RoomId);
+                return;
+            case MessageType.JoinMatchRequest:
+                var matchRequest = MatchCodec.DecodeJoinRequest(payload);
+                if (Session is null)
+                {
+                    throw new InvalidOperationException("Session is not active.");
+                }
+                Session.ReplyToJoin(_rooms, matchRequest.RoomId, matchRequest.Nickname, matchRequest.ReceiveArenaShots);
                 return;
             default:
                 throw new InvalidDataException("Server expects a request message.");

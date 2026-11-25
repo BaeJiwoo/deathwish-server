@@ -1,3 +1,5 @@
+using DeathWish.Protocol;
+
 namespace DeathWish.Server;
 
 public sealed class Room
@@ -11,10 +13,12 @@ public sealed class Room
 
     internal Room(int roomId, object sync, int admissionCapacity, int maxCommandsPerTick, TimeProvider? timeProvider = null,
         float gravityMetersPerSecondSquared = ServerOptions.DEFAULT_GRAVITY_METERS_PER_SECOND_SQUARED,
-        bool isPhysicsLab = false)
+        WorldMapId mapId = WorldMapId.Flat, int teamDeathmatchTeamSize = ServerOptions.DEFAULT_TDM_TEAM_SIZE,
+        bool isTrainingRoom = false)
     {
         RoomId = roomId;
-        World = new GameWorld(roomId, admissionCapacity, maxCommandsPerTick, timeProvider, gravityMetersPerSecondSquared, isPhysicsLab);
+        World = new GameWorld(roomId, admissionCapacity, maxCommandsPerTick, timeProvider, gravityMetersPerSecondSquared,
+            mapId, teamDeathmatchTeamSize, isTrainingRoom);
         _sync = sync;
     }
 

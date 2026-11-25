@@ -6,9 +6,12 @@ namespace DeathWish.Server;
 internal sealed class MovementMailbox
 {
     internal const int INPUT_TIMEOUT_MS = 250;
+    private const int MAX_PENDING_ACTIONS = 16;
 
     private readonly object _sync = new();
     private readonly TimeProvider _timeProvider;
+    // A null ray represents one jump press.
+    private readonly Queue<CameraRay?> _actions = new();
     private MoveInput _latest;
     private long _receivedTimestamp;
     private bool _hasInput;
@@ -58,11 +61,50 @@ internal sealed class MovementMailbox
         }
     }
 
+    /// <summary>Queues an action from the network thread. A full queue rejects the input.</summary>
+    internal void EnqueueAction(CameraRay? ray)
+    {
+        lock (_sync)
+        {
+            if (_isClosed)
+            {
+                return;
+            }
+            if (_actions.Count >= MAX_PENDING_ACTIONS)
+            {
+                throw new InvalidDataException("Too many pending player actions.");
+            }
+            _actions.Enqueue(ray);
+        }
+    }
+
+    /// <summary>Removes the oldest action. Called by the world loop.</summary>
+    internal bool TryTakeAction(out CameraRay? ray)
+    {
+        lock (_sync)
+        {
+            return _actions.TryDequeue(out ray);
+        }
+    }
+
+    /// <summary>Clears input while bodyless and returns how many ray requests still need replies. Called by the world loop.</summary>
+    internal int DiscardPendingInputs()
+    {
+        lock (_sync)
+        {
+            int discardedRays = _actions.Count(action => action.HasValue);
+            _actions.Clear();
+            _latest = new MoveInput(_latest.Sequence, 0f, 0f);
+            return discardedRays;
+        }
+    }
+
     internal void Close()
     {
         lock (_sync)
         {
             _isClosed = true;
+            _actions.Clear();
             _hasInput = false;
             _latest = default;
         }

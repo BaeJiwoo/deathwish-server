@@ -242,4 +242,100 @@ powershell -ExecutionPolicy Bypass -File .\integrations\Unity\Install.ps1 -Unity
 - [ ] 서버 종료를 클라이언트가 감지하고, 서버 재실행·재접속도 성공한다.
 - [ ] 자동 테스트가 생략 없이 종료 코드 0으로 완료된다.
 
-관련 문서: [프로토콜](Protocol.md), [구현 계획](ImplementationPlan.md), [Unity 연동 상세](../integrations/Unity/README.md), [개발 기록](devlog/README.md).
+## 11. 팀 데스매치 경기장 확인
+
+서버와 Unity 클라이언트의 `codex/tdm-poc` 작업 사본을 사용합니다. Unity를 종료한 상태에서 위 설치 명령으로 공유 DLL과 맵 데이터를 동기화합니다. 서버 저장소에서 다음 설정으로 실행하면 평지, 새 경기장, PhysicsLab을 한 번에 확인할 수 있습니다.
+
+```powershell
+$env:SERVER_ROOM_COUNT = '3'
+$env:SERVER_TDM_ROOM_ID = '2'
+$env:SERVER_TDM_TEAM_SIZE = '1'
+dotnet run --project src/DeathWish.Server -- 127.0.0.1 7777
+```
+
+Windows Application Control이 빌드된 앱 호스트 실행을 차단한 이 작업 환경에서는 같은 빌드의 관리형 진입점으로 로컬 검증을 진행했습니다.
+
+```powershell
+dotnet build src/DeathWish.Server
+dotnet .\src\DeathWish.Server\bin\Debug\net10.0\DeathWish.Server.dll 127.0.0.1 7777
+```
+
+Unity에서 `SyncTestScene`을 열고 닉네임을 입력한 뒤 방 2에 입장합니다. 화면의 `Connected | TeamDeathmatch`와 서버가 지정한 스폰 위치를 확인합니다. 두 번째 플레이어가 입장해 경기가 시작되면 엄폐물로 걸어가 멈추는지, 옆 통로가 열려 있는지 확인합니다. 연결을 끊고 방 1과 방 3에 각각 접속해 평지와 PhysicsLab을 확인합니다.
+
+## 12. 팀 데스매치 교전 확인
+
+1. 두 클라이언트가 서로 다른 닉네임을 입력해 같은 TeamDeathmatch 방에 입장합니다. 이름표와 팀 색상의 원통형 캐릭터, 오른쪽의 사각형 총이 보이는지 확인합니다. 기본 오른쪽 어깨에서 몸통은 화면 왼쪽 가장자리 가까이에 있고 조준선은 가운데에 있습니다. `Q`로 어깨를 전환해 카메라 배치가 반전되고 총은 캐릭터 오른쪽에 붙어 있는지 확인합니다.
+2. `Capture input`을 누른 뒤 좌클릭으로 상대를 쏩니다. 적중할 때마다 상대의 체력바가 25씩 줄어들고, 엄폐물 뒤와 아군에게는 피해가 들어가지 않아야 합니다.
+3. 네 번 적중하면 처치자와 피해자 이름이 두 클라이언트의 킬로그에 한 번씩 표시됩니다. 피해자는 약 3초 뒤 빈 팀 스폰에서 같은 이름과 체력 100으로 복귀합니다.
+
+MockClient Console에서도 `/join 2 테스트01`로 입장할 수 있습니다. `/shoot 0 0 1`은 월드 +Z 방향의 사격을 보내고 `/match`는 현재 경기 상태, 팀별 참가자와 최근 킬로그를 출력합니다.
+
+## 13. 5대5 경기와 점수판 확인
+
+1. 위 서버 설정에서 `SERVER_TDM_TEAM_SIZE`를 `5`로 바꿔 다시 실행합니다. 방 2에 Unity 클라이언트 두 개를 먼저 입장시키고 MockClient Console 8개를 각각 다른 닉네임으로 접속시킵니다. TCP 테스트 프로젝트에도 10세션 회귀 시나리오가 포함됩니다.
+2. 9명까지는 대기하며, 10명째가 입장하면 경기 시작과 5대5 배정을 확인합니다. 추가 접속의 방 입장이 `WorldUnavailable`으로 거부되는지 확인합니다.
+3. Tab을 누르는 동안 두 Unity 클라이언트의 닉네임과 K/D/A가 일치하는지 확인합니다. 핑은 측정 전 대시, 측정 후 밀리초로 표시됩니다. Tab을 놓으면 점수판이 닫힙니다.
+4. 적을 처치해 팀 점수와 개인 킬·데스를 비교합니다. 적을 먼저 피격한 아군의 어시스트도 확인합니다. 한 팀이 10점에 도달하면 두 화면에 같은 승리 팀과 최종 점수가 표시됩니다.
+5. 경기 중 참가자를 끊어 점수판에서 사라지는지 확인합니다. 경기 종료 후 전원이 접속을 끊으면 같은 방이 다음 게임의 대기 상태로 돌아옵니다.
+
+전체 회귀 테스트는 다음 명령으로 실행합니다. 10개 로컬 TCP 연결의 5대5 배정, RTT, 사격 피해, 정원 초과, 이탈 후 교체 시나리오가 포함됩니다.
+
+```powershell
+dotnet build tests/DeathWish.ConnectionTests
+dotnet .\tests\DeathWish.ConnectionTests\bin\Debug\net10.0\DeathWish.ConnectionTests.dll
+```
+
+Unity 혼합 검증에는 [TeamDeathmatchHybridCheck.cs](../tests/UnitySceneChecks/Editor/TeamDeathmatchHybridCheck.cs)를 사용합니다. 테스트용 Unity 복사본의 `Assets/Editor`에 넣고 5대5 서버의 포트를 `DW_UNITY_HYBRID_PORT`로 지정한 뒤 Unity 배치 실행의 `-executeMethod TeamDeathmatchHybridCheck.Run`으로 실행합니다. 검사에 필요한 서버 설정은 방 3개, 팀 데스매치 방 2, 팀당 5명입니다.
+
+## 14. 아치와 외다리 물리 확인
+
+`SERVER_TDM_TEAM_SIZE=1`로 팀 데스매치를 시작하고 동쪽 경로로 이동합니다. [경기장 치수와 Blender 원본](../maps/TeamDeathmatch/README.md#동쪽-물리-검증-경로)
+
+1. 아치 중앙으로 앞뒤에서 통과합니다. 옆으로 붙어 기둥에 막히는지 확인하고, 가운데에서 점프해 곡면 천장에 닿는지 봅니다.
+2. 동쪽 경사로에서 외다리 위로 올라가고 반대쪽 경사로로 내려옵니다. 양 방향에서 접합부를 오가며 발판에 걸리거나 튀지 않는지 확인합니다.
+3. 다리 중간에서 옆으로 이동해 발판을 벗어납니다. 바닥에 착지한 뒤 다리 밑을 지나갑니다. 측면 우회로로도 기존처럼 상대편에 도착할 수 있습니다.
+
+## 15. 서쪽 블록 연속 점프 확인
+
+팀 데스매치를 시작한 뒤 서쪽 벽 옆의 남쪽 램프로 올라가 북쪽을 향합니다. Space와 전진 입력으로 발판 5개를 차례로 건넙니다. 짧은 간격에서는 공중에서 전진 입력을 놓고 착지한 뒤, 다음 발판을 향해 다시 움직입니다. 마지막 간격은 4.65 m이며 다음 발판이 0.25 m 높습니다. 발판 사이를 걸어서 벗어나면 바닥에 착지하는지, 마지막 발판에서 하차 램프로 내려올 수 있는지 확인합니다. [발판 치수와 점프 측정값](../maps/TeamDeathmatch/README.md#서쪽-블록-점프-코스)
+
+## 16. 연습장과 MockClient 순찰
+
+서버 저장소 루트에서 연습장 방을 지정합니다. 아래 설정은 방 2에서 팀 데스매치, 방 3에서 연습장, 방 4에서 PhysicsLab을 열어 줍니다. Unity의 `SyncTestScene`에서도 같은 주소와 연습장 방 번호로 입장할 수 있습니다.
+
+```powershell
+$env:SERVER_ROOM_COUNT = '4'
+$env:SERVER_TDM_ROOM_ID = '2'
+$env:SERVER_TRAINING_ROOM_ID = '3'
+dotnet build src/DeathWish.Server
+dotnet .\src\DeathWish.Server\bin\Debug\net10.0\DeathWish.Server.dll 127.0.0.1 7777
+```
+
+연습장은 첫 참가자부터 움직일 수 있습니다. 처치, 점수, 리스폰은 기존 서버 판정을 따르며 10점을 넘은 뒤에도 계속 연습할 수 있습니다.
+
+| 번호 | 순찰 구역 | 행동 |
+| --- | --- | --- |
+| 1 | 중앙 엄폐물 | 기둥 둘레를 반복 순찰 |
+| 2 | 동쪽 아치·외다리 | 아치를 지나 경사로와 외다리를 왕복 |
+| 3 | 서쪽 블록 | 진입 램프로 올라가 네 간격을 점프해 넘고 경로를 왕복 |
+| 4 | 동쪽 외곽 통로 | 팀별 위치로 이동해 반대 팀을 사격하고, 리스폰 후 복귀 |
+
+별도 터미널에서 다음 명령을 실행하면 MockClient가 지정한 이름으로 연습장에 입장해 바로 순찰합니다. 번호와 이름을 바꿔 여러 클라이언트를 띄울 수 있습니다. 종료할 때는 Ctrl+C를 누릅니다.
+
+```powershell
+dotnet build mockclient/DeathWish.MockClient.Console
+dotnet .\mockclient\DeathWish.MockClient.Console\bin\Debug\net10.0\DeathWish.MockClient.Console.dll 127.0.0.1 7777 "/patrol 2 3 다리봇"
+```
+
+대화형 콘솔에서는 `/join 3 순찰봇`으로 입장하고 `/patrol 1`로 시작합니다. 인수 없는 `/patrol`은 목록, `/patrol 2`는 경로 변경, `/stop`은 정지입니다. `/match`로 상태를 볼 수 있습니다. 상대 팀에서 순찰봇을 처치하면 대기 로그가 나오고, 리스폰 뒤 같은 번호의 구역으로 이동해 순찰을 재개합니다.
+
+봇끼리 교전하는 모습을 보려면 3번 방에 서로 다른 이름의 4번 봇을 두 개 이상 먼저 접속시킵니다. 두 팀이 동쪽 외곽 통로에 모이면 사격을 시작합니다.
+
+```powershell
+dotnet .\mockclient\DeathWish.MockClient.Console\bin\Debug\net10.0\DeathWish.MockClient.Console.dll 127.0.0.1 7777 "/patrol 4 3 DrillOne"
+dotnet .\mockclient\DeathWish.MockClient.Console\bin\Debug\net10.0\DeathWish.MockClient.Console.dll 127.0.0.1 7777 "/patrol 4 3 DrillTwo"
+```
+
+위 명령은 각 터미널에서 하나씩 실행합니다. 갱신된 Unity 클라이언트로 같은 방에 입장해 동쪽 통로에서 봇의 총구 섬광과 탄 궤적, 킬로그를 확인합니다. 플레이어도 **Capture input**을 누른 뒤 좌클릭하거나 누른 채로 사격할 수 있습니다. 조준선 아래의 `Hit`, `No damage`, `Cover`, `Miss`는 서버 판정입니다.
+
+관련 문서 [프로토콜](Protocol.md), [구현 계획](ImplementationPlan.md), [Unity 연동 상세](../integrations/Unity/README.md), [개발 기록](devlog/README.md).

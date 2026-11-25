@@ -1,3 +1,4 @@
+using System.Numerics;
 using DeathWish.Protocol;
 using DeathWish.Server;
 using DotNetty.Buffers;
@@ -70,6 +71,7 @@ internal static class SnapshotTests
             Require(snapshot.ServerTick == 3 && snapshot.Players.Count == 2 &&
                 Math.Abs(snapshot.Players.Single(p => p.PlayerId == ack.PlayerId).X - 1f / 3) < .0001f, "Snapshot follows movement");
             Require(SnapshotCodec.Decode(Read(other)[3..]).Players.Count == 1, "Room isolation");
+            VerifyPlayerActions(first, second, room.World, snapshot, ack.PlayerId);
             second.CloseAsync().GetAwaiter().GetResult();
             for (int i = 0; i < 3; i++)
             {
@@ -83,6 +85,32 @@ internal static class SnapshotTests
             second.FinishAndReleaseAll();
             other.FinishAndReleaseAll();
         }
+    }
+
+    private static void VerifyPlayerActions(EmbeddedChannel first, EmbeddedChannel second, GameWorld room,
+        WorldSnapshot before, long localId)
+    {
+        var local = before.Players.Single(p => p.PlayerId == localId);
+        var other = before.Players.Single(p => p.PlayerId != localId);
+        Vector3 direction = Vector3.Normalize(new Vector3(other.X - local.X, 0, other.Z - local.Z));
+        // The ray starts behind the requester and must pass through its body before reaching the other player.
+        var ray = new CameraRay(Vector3.UnitY - 3 * direction, direction);
+        first.WriteInbound(Unpooled.WrappedBuffer(ActionCodec.EncodeRay(ray)));
+        first.WriteInbound(Unpooled.WrappedBuffer(ActionCodec.EncodeJump()));
+        for (int tick = 0; tick < 3; tick++)
+        {
+            room.Tick(1f / 30);
+        }
+
+        byte[] result = Read(first);
+        Require(result[2] == (byte)MessageType.RaycastResult &&
+            PacketCodec.DecodeEcho(result[PacketCodec.HEADER_SIZE..]).Contains($"hit player {other.PlayerId} "),
+            "Camera ray ignores requester and hits the other player");
+        byte[] localSnapshot = Read(first);
+        Require(localSnapshot.SequenceEqual(Read(second)), "Only requester receives raycast result");
+        Require(SnapshotCodec.Decode(localSnapshot[PacketCodec.HEADER_SIZE..]).Players.Single(p => p.PlayerId == localId).Y > 0,
+            "Observer receives jump through the normal snapshot");
+        Console.WriteLine("PASS two-player camera hit, self exclusion, private result and shared jump snapshot");
     }
 
     private static async Task VerifyCoalescingAsync()

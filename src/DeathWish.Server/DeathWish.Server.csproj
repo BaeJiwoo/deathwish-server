@@ -12,6 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="../../maps/PhysicsLab/PhysicsLab.json" LogicalName="DeathWish.PhysicsLab.json" />
+    <EmbeddedResource Include="../../maps/TeamDeathmatch/TeamDeathmatch.json" LogicalName="DeathWish.TeamDeathmatch.json" />
   </ItemGroup>
   <ItemGroup><ProjectReference Include="../DeathWish.Protocol/DeathWish.Protocol.csproj" /></ItemGroup>
   <ItemGroup><InternalsVisibleTo Include="DeathWish.ConnectionTests" /></ItemGroup>

@@ -8,5 +8,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/DeathWish.Server/DeathWish.Server.csproj" />
     <ProjectReference Include="../../mockclient/DeathWish.MockClient.Core/DeathWish.MockClient.Core.csproj" />
+    <ProjectReference Include="../../mockclient/DeathWish.MockClient.Console/DeathWish.MockClient.Console.csproj" />
   </ItemGroup>
 </Project>

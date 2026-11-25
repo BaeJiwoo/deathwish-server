@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Numerics;
 using DeathWish.MockClient.Core;
 using DeathWish.Protocol;
 using DeathWish.Server;
@@ -150,6 +151,8 @@ static class RoomClientTests
             throw new Exception("TCP shutdown left room members or sessions");
 
         await VerifyPeerResponses(deadline.Token);
+        await VerifyLatencyReplies(deadline.Token);
+        await VerifyArenaShotBuffer(deadline.Token);
         Console.WriteLine("PASS TCP room admission, shared membership, Echo coexistence, shutdown, and client response validation");
     }
 
@@ -217,6 +220,148 @@ static class RoomClientTests
             }
         }
         finally { listener.Stop(); }
+    }
+
+    private static async Task VerifyLatencyReplies(CancellationToken token)
+    {
+        const int ROOM_ID = 1;
+        const int PLAYER_ID = 2;
+        const long FIRST_PROBE_TOKEN = 10;
+        const long SECOND_PROBE_TOKEN = 11;
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            using var client = new ConnectionTestClient();
+            Task<TcpClient> accepting = listener.AcceptTcpClientAsync();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            await client.ConnectAsync("127.0.0.1", port, token);
+            using TcpClient peer = await accepting.WaitAsync(token);
+            NetworkStream stream = peer.GetStream();
+
+            Task<JoinRoomResponse> joining = client.JoinMatchAsync(ROOM_ID, "Tester", token);
+            byte[] expectedJoin = MatchCodec.EncodeJoinRequest(ROOM_ID, "Tester");
+            if (!(await ReadFrameAsync(stream, token)).SequenceEqual(expectedJoin))
+            {
+                throw new Exception("Named TCP join bytes differ.");
+            }
+            byte[] joined = PacketCodec.EncodeJoinRoomResponse(new JoinRoomResponse(ROOM_ID, RoomJoinResult.Success));
+            byte[] ack = PacketCodec.EncodeJoinAck(new JoinAck(ROOM_ID, PLAYER_ID, 1, 0, 0, 0, WorldMapId.TeamDeathmatch));
+            await stream.WriteAsync(joined.Concat(ack).ToArray(), token);
+            if ((await joining).Result != RoomJoinResult.Success || (await client.WaitForAdmissionAsync(token)).PlayerId != PLAYER_ID)
+            {
+                throw new Exception("Named TCP admission failed.");
+            }
+
+            Task<string> echo = client.EchoAsync("in flight", token);
+            byte[] echoRequest = PacketCodec.EncodeEcho(MessageType.EchoRequest, "in flight");
+            if (!(await ReadFrameAsync(stream, token)).SequenceEqual(echoRequest))
+            {
+                throw new Exception("Wrong echo request during latency check.");
+            }
+            var player = new MatchPlayer(PLAYER_ID, "Tester", TeamId.Red, MatchState.MAX_HEALTH, 0, 0, 0, 5);
+            var state = new MatchState(ROOM_ID, 2, MatchPhase.Waiting, 0, 0, null, new[] { player });
+            byte[] probe = PingCodec.EncodeProbe(FIRST_PROBE_TOKEN);
+            byte[] incoming = probe.Concat(MatchCodec.EncodeState(state))
+                .Concat(PacketCodec.EncodeEcho(MessageType.EchoResponse, "in flight")).ToArray();
+            int split = PacketCodec.HEADER_SIZE + 1;
+            await stream.WriteAsync(incoming.AsMemory(0, split), token);
+            await stream.WriteAsync(incoming.AsMemory(split), token);
+            byte[] firstReply = await ReadFrameAsync(stream, token);
+            if (!firstReply.SequenceEqual(PingCodec.EncodeReply(FIRST_PROBE_TOKEN)) ||
+                await echo != "in flight" || client.LatestMatchState?.Players.Single().PingMs != 5)
+            {
+                throw new Exception("Fragmented latency probe interfered with a roster or pending Echo.");
+            }
+
+            var movement = new MoveInput(0, 1, 0);
+            await stream.WriteAsync(PingCodec.EncodeProbe(SECOND_PROBE_TOKEN), token);
+            Task sendingMovement = client.SendMoveAsync(movement, token);
+            byte[] first = await ReadFrameAsync(stream, token);
+            byte[] second = await ReadFrameAsync(stream, token);
+            await sendingMovement;
+            byte[] moveFrame = PacketCodec.EncodeMoveInput(movement);
+            byte[] replyFrame = PingCodec.EncodeReply(SECOND_PROBE_TOKEN);
+            bool framesAreIntact = (first.SequenceEqual(moveFrame) && second.SequenceEqual(replyFrame)) ||
+                (second.SequenceEqual(moveFrame) && first.SequenceEqual(replyFrame));
+            if (!framesAreIntact)
+            {
+                throw new Exception("Latency reply and movement bytes interleaved.");
+            }
+            Console.WriteLine("PASS TCP latency replies coexist with fragmented match frames, pending Echo, and movement");
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    private static async Task VerifyArenaShotBuffer(CancellationToken token)
+    {
+        const int ROOM_ID = 1;
+        const int PLAYER_ID = 2;
+        const int EXPECTED_BUFFER_SIZE = 64;
+        const int SHOT_COUNT = EXPECTED_BUFFER_SIZE + 2;
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            using var client = new ConnectionTestClient();
+            Task<TcpClient> accepting = listener.AcceptTcpClientAsync();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            await client.ConnectAsync("127.0.0.1", port, token);
+            using TcpClient peer = await accepting.WaitAsync(token);
+            NetworkStream stream = peer.GetStream();
+
+            Task<JoinRoomResponse> joining = client.JoinMatchAsync(ROOM_ID, "Viewer", receiveArenaShots: true, token);
+            byte[] expectedJoin = MatchCodec.EncodeJoinRequest(ROOM_ID, "Viewer", receiveArenaShots: true);
+            if (!(await ReadFrameAsync(stream, token)).SequenceEqual(expectedJoin))
+            {
+                throw new Exception("TCP join did not opt in to firing events.");
+            }
+            byte[] joined = PacketCodec.EncodeJoinRoomResponse(new JoinRoomResponse(ROOM_ID, RoomJoinResult.Success));
+            byte[] ack = PacketCodec.EncodeJoinAck(new JoinAck(ROOM_ID, PLAYER_ID, 1, 0, 0, 0, WorldMapId.TeamDeathmatch));
+            await stream.WriteAsync(joined.Concat(ack).ToArray(), token);
+            await joining;
+            await client.WaitForAdmissionAsync(token);
+
+            Task<string> echo = client.EchoAsync("firing complete", token);
+            await ReadFrameAsync(stream, token);
+            IEnumerable<byte> shots = Enumerable.Range(2, SHOT_COUNT).SelectMany(tick => MatchCodec.EncodeShot(
+                new ArenaShot(ROOM_ID, tick, PLAYER_ID, Vector3.Zero, Vector3.UnitZ, ArenaShotOutcome.Miss)));
+            byte[] incoming = shots.Concat(ActionCodec.EncodeResult("Raycast miss"))
+                .Concat(PacketCodec.EncodeEcho(MessageType.EchoResponse, "firing complete")).ToArray();
+            await stream.WriteAsync(incoming, token);
+            await echo;
+
+            for (int index = 0; index < EXPECTED_BUFFER_SIZE; index++)
+            {
+                if (!client.TryReadArenaShot(out ArenaShot shot) || shot.ServerTick != index + 4)
+                {
+                    throw new Exception("The firing queue did not retain the latest events in receive order.");
+                }
+            }
+            if (client.TryReadArenaShot(out _) || !client.TryReadRaycastResult(out string? ray) || ray != "Raycast miss")
+            {
+                throw new Exception("Arena firing events changed the legacy raycast response stream or exceeded the buffer limit.");
+            }
+            Console.WriteLine("PASS TCP arena opt-in and bounded firing events coexist with legacy raycast results");
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    private static async Task<byte[]> ReadFrameAsync(NetworkStream stream, CancellationToken token)
+    {
+        var header = new byte[PacketCodec.HEADER_SIZE];
+        await stream.ReadExactlyAsync(header, token);
+        int payloadSize = (header[0] << 8) | header[1];
+        var frame = new byte[header.Length + payloadSize];
+        header.CopyTo(frame, 0);
+        await stream.ReadExactlyAsync(frame.AsMemory(header.Length), token);
+        return frame;
     }
 
     private static async Task ExpectJoin(ConnectionTestClient client, int id, RoomJoinResult expected, CancellationToken token)

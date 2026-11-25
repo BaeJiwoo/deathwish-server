@@ -13,13 +13,21 @@ public enum MessageType : byte
     JoinRoomResponse = 4,
     JoinAck = 5,
     MoveInput = 6,
-    WorldSnapshot = 7
+    WorldSnapshot = 7,
+    Jump = 8,
+    CameraRay = 9,
+    RaycastResult = 10,
+    JoinMatchRequest = 11,
+    MatchState = 12,
+    KillEvent = 13,
+    LatencyProbe = 14,
+    LatencyReply = 15,
+    ArenaShot = 16
 }
 
 public static class PacketCodec
 {
     private const int JOIN_ACK_BASE_SIZE = 32;
-    private const byte PHYSICS_LAB_MAP_ID = 1;
     private const int MOVE_INPUT_PAYLOAD_SIZE = 12;
     private const int MOVE_SEQUENCE_OFFSET = 0;
     private const int MOVE_X_OFFSET = 4;
@@ -112,12 +120,13 @@ public static class PacketCodec
     public static byte[] EncodeJoinAck(JoinAck ack)
     {
         ValidateJoinAck(ack);
-        int payloadSize = ack.IsPhysicsLab ? JOIN_ACK_BASE_SIZE + 1 : JOIN_ACK_BASE_SIZE;
+        bool hasMapId = ack.MapId != WorldMapId.Flat;
+        int payloadSize = hasMapId ? JOIN_ACK_BASE_SIZE + 1 : JOIN_ACK_BASE_SIZE;
         byte[] frame = new byte[HEADER_SIZE + payloadSize];
         frame[1] = (byte)payloadSize;
-        if (ack.IsPhysicsLab)
+        if (hasMapId)
         {
-            frame[HEADER_SIZE + JOIN_ACK_BASE_SIZE] = PHYSICS_LAB_MAP_ID;
+            frame[HEADER_SIZE + JOIN_ACK_BASE_SIZE] = (byte)ack.MapId;
         }
         frame[2] = (byte)MessageType.JoinAck;
         Span<byte> payload = frame.AsSpan(HEADER_SIZE);
@@ -136,14 +145,26 @@ public static class PacketCodec
         {
             throw new ArgumentNullException(nameof(payload));
         }
-        bool isPhysicsLab = payload.Length == JOIN_ACK_BASE_SIZE + 1 && payload[JOIN_ACK_BASE_SIZE] == PHYSICS_LAB_MAP_ID;
-        ValidatePayloadLength(payload, isPhysicsLab ? JOIN_ACK_BASE_SIZE + 1 : JOIN_ACK_BASE_SIZE);
+        WorldMapId mapId = WorldMapId.Flat;
+        if (payload.Length == JOIN_ACK_BASE_SIZE + 1)
+        {
+            mapId = (WorldMapId)payload[JOIN_ACK_BASE_SIZE];
+            if (mapId == WorldMapId.Flat)
+            {
+                throw new InvalidDataException("Flat map ID must be omitted.");
+            }
+        }
+        else
+        {
+            ValidatePayloadLength(payload, JOIN_ACK_BASE_SIZE);
+        }
+
         var ack = new JoinAck(BinaryPrimitives.ReadInt32BigEndian(payload),
             BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(4)),
             BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(12)),
             BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(20))),
             BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(24))),
-            BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(28))), isPhysicsLab);
+            BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(28))), mapId);
         ValidateJoinAck(ack);
         return ack;
     }
@@ -151,6 +172,11 @@ public static class PacketCodec
     private static void ValidateJoinAck(JoinAck ack)
     {
         ValidateRoomId(ack.RoomId);
+        if (ack.MapId is not (WorldMapId.Flat or WorldMapId.PhysicsLab or WorldMapId.TeamDeathmatch))
+        {
+            throw new InvalidDataException("Unknown world map ID.");
+        }
+
         if (ack.PlayerId <= 0 || ack.ServerTick <= 0 ||
             float.IsNaN(ack.X) || float.IsInfinity(ack.X) ||
             float.IsNaN(ack.Y) || float.IsInfinity(ack.Y) ||
@@ -173,7 +199,7 @@ public static class PacketCodec
     {
         if (result != RoomJoinResult.Success && result != RoomJoinResult.SessionUnavailable &&
             result != RoomJoinResult.RoomNotFound && result != RoomJoinResult.AlreadyInAnotherRoom &&
-            result != RoomJoinResult.WorldUnavailable)
+            result != RoomJoinResult.WorldUnavailable && result != RoomJoinResult.NicknameRequired)
             throw new InvalidDataException("Unknown room join result.");
     }
 
@@ -181,7 +207,10 @@ public static class PacketCodec
     {
         if (type != MessageType.EchoRequest && type != MessageType.EchoResponse &&
             type != MessageType.JoinRoomRequest && type != MessageType.JoinRoomResponse && type != MessageType.JoinAck &&
-            type != MessageType.MoveInput && type != MessageType.WorldSnapshot)
+            type != MessageType.MoveInput && type != MessageType.WorldSnapshot && type != MessageType.Jump &&
+            type != MessageType.CameraRay && type != MessageType.RaycastResult &&
+            type != MessageType.JoinMatchRequest && type != MessageType.MatchState && type != MessageType.KillEvent &&
+            type != MessageType.LatencyProbe && type != MessageType.LatencyReply && type != MessageType.ArenaShot)
             throw new InvalidDataException("Unknown message type.");
     }
 }

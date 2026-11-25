@@ -69,11 +69,20 @@ for ($attempt = 0; $attempt -lt 2; $attempt++) {
     if (!(Test-Path -LiteralPath "$fixture/Assets/DeathWishMovement/MovementTest.cs.disabled.meta")) { throw 'Old movement metadata not preserved.' }
     $manifest = [IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
     if ($manifest.dependencies.'com.unity.ugui' -ne '2.0.0') { throw 'Supported Canvas package missing.' }
+    if ($manifest.dependencies.'com.unity.modules.physics' -ne '1.0.0') { throw 'Required camera physics package missing.' }
     foreach ($relative in @('SyncTestClient.cs', 'SyncTestClient.cs.meta', 'Scenes/SyncTestScene.unity.meta',
+        'RaycastFeedback.cs', 'RaycastFeedback.cs.meta', 'ShoulderCameraSettings.cs', 'ShoulderCameraSettings.cs.meta',
+        'TeamDeathmatchHud.cs', 'TeamDeathmatchHud.cs.meta', 'ArenaWeaponVisual.cs', 'ArenaWeaponVisual.cs.meta',
+        'Resources/ShotFeedback.shader', 'Resources/ShotFeedback.shader.meta', 'Resources/TeamDeathmatch.json.meta',
         'Resources/SyncTestWorld.shader', 'Resources/SyncTestWorld.shader.meta')) {
         $sourceHash = (Get-FileHash (Join-Path $repo "integrations/Unity/$relative")).Hash
         $installedHash = (Get-FileHash "$fixture/Assets/DeathWishMovement/$relative").Hash
         if ($sourceHash -ne $installedHash) { throw "Installed content mismatch: $relative" }
+    }
+    foreach ($map in @('PhysicsLab', 'TeamDeathmatch')) {
+        $sourceHash = (Get-FileHash (Join-Path $repo "maps/$map/$map.json")).Hash
+        $installedHash = (Get-FileHash "$fixture/Assets/DeathWishMovement/Resources/$map.json").Hash
+        if ($sourceHash -ne $installedHash) { throw "Installed map content mismatch: $map" }
     }
     $installedScenePath = "$fixture/Assets/DeathWishMovement/Scenes/SyncTestScene.unity"
     if ($attempt -eq 0) {
@@ -81,8 +90,15 @@ for ($attempt = 0; $attempt -lt 2; $attempt++) {
         if ([IO.File]::ReadAllText($installedScenePath) -cne $sceneSource) { throw 'Scene installation changed the template.' }
         [IO.File]::AppendAllText($installedScenePath, "`n# User layout customization retained.`n", $utf8WithoutBom)
         $customizedScene = [IO.File]::ReadAllText($installedScenePath)
-    } elseif ([IO.File]::ReadAllText($installedScenePath) -cne $customizedScene) {
-        throw 'Repeated install overwrote the customized scene.'
+        $customizedManifest = ($manifest | ConvertTo-Json -Depth 100 -Compress) + "`n"
+        [IO.File]::WriteAllText($manifestPath, $customizedManifest, $utf8WithoutBom)
+    } else {
+        if ([IO.File]::ReadAllText($installedScenePath) -cne $customizedScene) {
+            throw 'Repeated install overwrote the customized scene.'
+        }
+        if ([IO.File]::ReadAllText($manifestPath) -cne $customizedManifest) {
+            throw 'Repeated install rewrote a compatible manifest.'
+        }
     }
 }
 $manifest = [IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json

@@ -15,6 +15,9 @@ public sealed class GameServer
     private readonly int _roomCount;
     private readonly int _tickRate;
     private readonly float _gravityMetersPerSecondSquared;
+    private readonly int? _teamDeathmatchRoomId;
+    private readonly int _teamDeathmatchTeamSize;
+    private readonly int? _trainingRoomId;
     private readonly TimeProvider _timeProvider;
 
     public GameServer(ServerOptions options) : this(options, TimeProvider.System) { }
@@ -27,6 +30,9 @@ public sealed class GameServer
         _roomCount = options.RoomCount;
         _tickRate = options.TickRate;
         _gravityMetersPerSecondSquared = options.GravityMetersPerSecondSquared;
+        _teamDeathmatchRoomId = options.TeamDeathmatchRoomId;
+        _teamDeathmatchTeamSize = options.TeamDeathmatchTeamSize;
+        _trainingRoomId = options.TrainingRoomId;
         _timeProvider = timeProvider;
     }
 
@@ -36,7 +42,8 @@ public sealed class GameServer
 
         var sessions = new SessionManager();
         var rooms = new RoomManager(sessions, _roomCount, GameWorld.DEFAULT_ADMISSION_CAPACITY,
-            GameWorld.DEFAULT_MAX_COMMANDS_PER_TICK, _timeProvider, _gravityMetersPerSecondSquared);
+            GameWorld.DEFAULT_MAX_COMMANDS_PER_TICK, _timeProvider, _gravityMetersPerSecondSquared, _teamDeathmatchRoomId,
+            _teamDeathmatchTeamSize, _trainingRoomId);
         var worldLoop = new WorldLoop(rooms.GetWorlds(), _tickRate, _timeProvider);
         using var loopCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task? worldTask = null;

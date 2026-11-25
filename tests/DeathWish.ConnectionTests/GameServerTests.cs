@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Net;
 using System.Net.Sockets;
 using DeathWish.MockClient.Core;
@@ -69,6 +70,30 @@ static class GameServerTests
             }
             else
             {
+                Vector3 toOther = new(secondAck.X - firstAck.X, 0, secondAck.Z - firstAck.Z);
+                var ray = new CameraRay(Vector3.UnitY, Vector3.Normalize(toOther));
+                await first.SendRayAsync(ray, deadline.Token);
+                await first.SendJumpAsync(deadline.Token);
+                // The echo acknowledges parsing both prior frames on this TCP connection.
+                await first.EchoAsync("actions queued", deadline.Token);
+                clock.Advance(TimeSpan.FromMilliseconds(100));
+                await clock.NextDelayAsync();
+                string? report;
+                while (!first.TryReadRaycastResult(out report))
+                {
+                    await Task.Delay(1, deadline.Token);
+                }
+                Require(report!.Contains($"hit player {secondAck.PlayerId} "), "Closest other player in camera ray");
+                Require(!second.TryReadRaycastResult(out _), "Raycast result is private to requester");
+                clock.Advance(TimeSpan.FromMilliseconds(100));
+                await clock.NextDelayAsync();
+                while ((second.LatestSnapshot?.ServerTick ?? 0) < 3)
+                {
+                    await Task.Delay(1, deadline.Token);
+                }
+                Require(second.LatestSnapshot!.Players.Single(p => p.PlayerId == firstAck.PlayerId).Y > 0,
+                    "Observer receives jump through the normal snapshot");
+                Console.WriteLine("PASS TCP camera ray hits second player, private reply and replicated jump");
                 cancellation.Cancel();
                 await running.WaitAsync(deadline.Token);
             }

@@ -42,6 +42,11 @@ PrimitiveTests.Run();
 BepuMovementTests.Run();
 PhysicsLabTests.Run();
 PhysicsLabTraversalTests.Run();
+TeamDeathmatchMapTests.Run();
+TeamDeathmatchJumpTests.Run();
+TrainingPatrolTcpTests.VerifyApproaches();
+MatchProtocolTests.Run();
+TeamDeathmatchCombatTests.Run();
 MovementInputTests.Run();
 await SnapshotTests.RunAsync();
 await MovementTests.RunAsync();
@@ -191,6 +196,8 @@ try
 {
     int port = ((IPEndPoint)listener.LocalEndpoint).Port;
     await GameServerTests.RunAsync();
+    await TeamDeathmatchTcpTests.RunAsync();
+    await TrainingPatrolTcpTests.RunAsync();
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
     using var client = new ConnectionTestClient();
     Task<TcpClient> accept = listener.AcceptTcpClientAsync();

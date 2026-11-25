@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using DeathWish.Protocol;
 
 namespace DeathWish.Server;
 
@@ -12,8 +13,10 @@ public static class ServerOptionsLoader
         if (args.Length > 2) throw new ArgumentException("Usage: DeathWish.Server [IP address] [port 1-65535]");
 
         var values = ReadFile(envFilePath);
+        string? ResolveOptional(string key)
+            => Environment.GetEnvironmentVariable(key) ?? values.GetValueOrDefault(key);
         string Resolve(string key, string fallback)
-            => Environment.GetEnvironmentVariable(key) ?? values.GetValueOrDefault(key) ?? fallback;
+            => ResolveOptional(key) ?? fallback;
 
         string address = args.ElementAtOrDefault(0) ?? Resolve("SERVER_ADDRESS", ServerOptions.DefaultAddress);
         string portText = args.ElementAtOrDefault(1) ?? Resolve("SERVER_PORT", ServerOptions.DefaultPort.ToString(CultureInfo.InvariantCulture));
@@ -34,7 +37,34 @@ public static class ServerOptionsLoader
             throw new ArgumentException("SERVER_GRAVITY_METERS_PER_SECOND_SQUARED must be a nonnegative finite number.");
         }
 
-        return new ServerOptions(address, port, roomCount, tickRate, gravityMetersPerSecondSquared);
+        int? ResolveRoomId(string key)
+        {
+            string? roomIdText = ResolveOptional(key);
+            if (roomIdText is null)
+            {
+                return null;
+            }
+            if (!int.TryParse(roomIdText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int roomId) ||
+                roomId < 1 || roomId > roomCount)
+            {
+                throw new ArgumentException($"{key} must be an integer from 1 to SERVER_ROOM_COUNT.");
+            }
+
+            return roomId;
+        }
+        int? teamDeathmatchRoomId = ResolveRoomId("SERVER_TDM_ROOM_ID");
+        int? trainingRoomId = ResolveRoomId("SERVER_TRAINING_ROOM_ID");
+
+        string teamSizeText = Resolve("SERVER_TDM_TEAM_SIZE",
+            ServerOptions.DEFAULT_TDM_TEAM_SIZE.ToString(CultureInfo.InvariantCulture));
+        if (!int.TryParse(teamSizeText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int teamDeathmatchTeamSize) ||
+            teamDeathmatchTeamSize is < 1 or > MatchState.MAX_TEAM_SIZE)
+        {
+            throw new ArgumentException($"SERVER_TDM_TEAM_SIZE must be an integer from 1 to {MatchState.MAX_TEAM_SIZE}.");
+        }
+
+        return new ServerOptions(address, port, roomCount, tickRate, gravityMetersPerSecondSquared, teamDeathmatchRoomId,
+            teamDeathmatchTeamSize, trainingRoomId);
     }
 
     private static Dictionary<string, string> ReadFile(string path)

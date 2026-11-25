@@ -64,6 +64,31 @@ internal static class PhysicsLabTraversalTests
         Console.WriteLine($"PASS PhysicsLab wall: head-on {firstContact}, diagonal {diagonalContact} to {slideEnd}");
 
         VerifyPlatformOpening();
+        VerifyJumpAndCameraRay();
+    }
+
+    private static void VerifyJumpAndCameraRay()
+    {
+        using var player = new TestPlayer();
+        player.SendAction(ActionCodec.EncodeJump());
+        float apex = 0;
+        for (int tick = 0; tick < 60; tick++)
+        {
+            if (tick == 8)
+            {
+                player.SendAction(ActionCodec.EncodeJump());
+            }
+            apex = Math.Max(apex, player.Move(0, 0).Y);
+        }
+        Require(MathF.Abs(apex - 1.8f) < 0.05f && MathF.Abs(player.Position.Y) < 0.02f,
+            $"Jump height or landing, apex {apex:F3}", player.Position);
+        player.SendAction(ActionCodec.EncodeJump());
+        Require(player.Move(0, 0).Y > 0.12f, "Jump after landing", player.Position);
+
+        string floor = player.Cast(new Vector3(0, 2, 0), -Vector3.UnitY);
+        string sky = player.Cast(new Vector3(7, 1, 0), Vector3.UnitY);
+        Require(floor.Contains("hit terrain") && sky == "Raycast miss", $"Down/up rays: {floor}, {sky}", player.Position);
+        Console.WriteLine($"PASS jump apex {apex:F3} m, airborne rejection, landing, second jump, camera terrain hit and miss");
     }
 
     private static void VerifyPlatformOpening()
@@ -90,7 +115,7 @@ internal static class PhysicsLabTraversalTests
         {
             Vector3 previous = player.Position;
             Vector3 next = player.Move(0, directionZ);
-            // The uphill edge of the upright box supports the body before its center crosses the seam.
+            // The uphill rim of the upright cylinder reaches the ramp before its center crosses the seam.
             float expectedY = Math.Clamp((18 - next.Z + 0.325f) * RAMP_SLOPE, 0, 6);
             Require((next.Z - previous.Z) * directionZ > 0.12f && MathF.Abs(next.X + 12) < 0.02f,
                 "Continuous forward progress on ramp", next);
@@ -124,6 +149,32 @@ internal static class PhysicsLabTraversalTests
             _channel = new EmbeddedChannel(new GameChannelHandler(sessions, rooms));
             _channel.WriteInbound(Unpooled.WrappedBuffer(PacketCodec.EncodeJoinRoomRequest(new JoinRoomRequest(1))));
             _world.Tick(TICK_SECONDS);
+        }
+
+        internal void SendAction(byte[] frame) => _channel.WriteInbound(Unpooled.WrappedBuffer(frame));
+
+        internal string Cast(Vector3 offset, Vector3 direction)
+        {
+            SendAction(ActionCodec.EncodeRay(new CameraRay(offset, direction)));
+            Move(0, 0);
+            _channel.RunPendingTasks();
+            while (_channel.ReadOutbound<IByteBuffer>() is { } buffer)
+            {
+                try
+                {
+                    byte[] frame = new byte[buffer.ReadableBytes];
+                    buffer.ReadBytes(frame);
+                    if (frame[2] == (byte)MessageType.RaycastResult)
+                    {
+                        return PacketCodec.DecodeEcho(frame[PacketCodec.HEADER_SIZE..]);
+                    }
+                }
+                finally
+                {
+                    buffer.Release();
+                }
+            }
+            throw new Exception("Missing raycast result.");
         }
 
         internal Vector3 Move(float x, float z)

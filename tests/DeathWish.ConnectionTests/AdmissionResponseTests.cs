@@ -12,6 +12,7 @@ static class AdmissionResponseTests
         byte[] expected = Convert.FromHexString("00200500000001000000000000000200000000000000033F800000C00000003F000000");
         byte[] encoded = PacketCodec.EncodeJoinAck(new JoinAck(1, 2, 3, 1, -2, .5f));
         Require(encoded.SequenceEqual(expected), "JoinAck exact big-endian bytes");
+        VerifyMapIds(expected);
         for (int split = 0; split <= expected.Length; split++)
         {
             var reader = new PacketReader();
@@ -67,6 +68,34 @@ static class AdmissionResponseTests
         await CheckBlockedOutput(true);
         CheckLengthDecoder();
         Console.WriteLine("PASS JoinAck bytes, framing, validation, world ordering, output bounds and write timeout");
+    }
+
+    private static void VerifyMapIds(byte[] flat)
+    {
+        Require(PacketCodec.DecodeJoinAck(flat[3..]).MapId == WorldMapId.Flat, "Flat map ID is implicit");
+        byte[] lab = PacketCodec.EncodeJoinAck(new JoinAck(1, 2, 3, 1, -2, .5f, true));
+        byte[] arena = PacketCodec.EncodeJoinAck(new JoinAck(1, 2, 3, 1, -2, .5f, WorldMapId.TeamDeathmatch));
+        Require(lab[1] == 33 && lab[3..^1].SequenceEqual(flat[3..]) && lab[^1] == 1,
+            "PhysicsLab retains the original wire layout");
+        Require(PacketCodec.DecodeJoinAck(lab[3..]) is { MapId: WorldMapId.PhysicsLab, IsPhysicsLab: true },
+            "PhysicsLab round trip");
+        Require(arena[1] == 33 && arena[3..^1].SequenceEqual(flat[3..]) && arena[^1] == 2,
+            "Team deathmatch appends map ID 2");
+        Require(PacketCodec.DecodeJoinAck(arena[3..]) is { MapId: WorldMapId.TeamDeathmatch, IsPhysicsLab: false },
+            "Team deathmatch map round trip");
+
+        foreach (byte invalidMapId in new byte[] { 0, 3, 255 })
+        {
+            arena[^1] = invalidMapId;
+            try
+            {
+                PacketCodec.DecodeJoinAck(arena[3..]);
+                throw new Exception("Invalid explicit map ID accepted");
+            }
+            catch (InvalidDataException)
+            {
+            }
+        }
     }
 
     private static void CheckLengthDecoder()

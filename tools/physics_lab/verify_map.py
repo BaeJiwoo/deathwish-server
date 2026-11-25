@@ -86,6 +86,20 @@ def verify(path):
     ring = by_name["Torus"]
     require(not hits(ring, 2, (0, 2.65), 1) and not hits(ring, 2, (0, 2.65), -1), "ring opening blocked")
     require(bool(hits(ring, 2, (3.7, 2.65), 1)), "ring rim missing")
+    paint = data["caution"]
+    require(paint["name"] not in by_name, "paint included in collision inventory")
+    for x, z in ((-17, -14.85), (-17, -21.15), (-20.8, -18), (-13.68, -18)):
+        expect_surface(paint, 1, (x, z), -1, 6.008)
+    for x in (-24.8, -9.2):
+        expect_surface(paint, 1, (x, 3.5), -1, 3.008)
+    for x, z in ((24.8, 0), (-24.8, 0), (0, 24.8), (0, -24.8)):
+        expect_surface(paint, 1, (x, z), -1, 0.008)
+    for axis, point, direction, expected in (
+            (0, (19.8, 0), 1, 24.992), (0, (19.8, 0), -1, -24.992),
+            (2, (0, 19.8), 1, 24.992), (2, (0, 19.8), -1, -24.992)):
+        expect_surface(paint, axis, point, direction, expected)
+    require(not hits(paint, 1, (-17, -18), -1), "paint covers the platform opening")
+    print("PASS edge paint on ramp, platform opening, floor perimeter and four walls")
     print("PASS floor, four inward walls, ramp, platform, opening and ring")
     print(f"{len(by_name)} objects, {sum(len(o['vertices']) for o in by_name.values())} vertices, "
           f"{sum(len(o['triangles']) for o in by_name.values())} triangles")

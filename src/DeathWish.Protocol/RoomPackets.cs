@@ -1,5 +1,12 @@
 namespace DeathWish.Protocol;
 
+public enum WorldMapId : byte
+{
+    Flat = 0,
+    PhysicsLab = 1,
+    TeamDeathmatch = 2
+}
+
 public readonly struct JoinAck
 {
     public int RoomId { get; }
@@ -9,16 +16,22 @@ public readonly struct JoinAck
     public float Y { get; }
     public float Z { get; }
 
-    public bool IsPhysicsLab { get; }
+    public WorldMapId MapId { get; }
+    public bool IsPhysicsLab => MapId == WorldMapId.PhysicsLab;
 
     public JoinAck(int roomId, long playerId, long serverTick, float x, float y, float z)
-        : this(roomId, playerId, serverTick, x, y, z, false)
+        : this(roomId, playerId, serverTick, x, y, z, WorldMapId.Flat)
     {
     }
 
     public JoinAck(int roomId, long playerId, long serverTick, float x, float y, float z, bool isPhysicsLab)
+        : this(roomId, playerId, serverTick, x, y, z, isPhysicsLab ? WorldMapId.PhysicsLab : WorldMapId.Flat)
     {
-        IsPhysicsLab = isPhysicsLab;
+    }
+
+    public JoinAck(int roomId, long playerId, long serverTick, float x, float y, float z, WorldMapId mapId)
+    {
+        MapId = mapId;
         RoomId = roomId;
         PlayerId = playerId;
         ServerTick = serverTick;
@@ -34,7 +47,8 @@ public enum RoomJoinResult : byte
     SessionUnavailable = 1,
     RoomNotFound = 2,
     AlreadyInAnotherRoom = 3,
-    WorldUnavailable = 4
+    WorldUnavailable = 4,
+    NicknameRequired = 5
 }
 
 public readonly struct JoinRoomRequest
