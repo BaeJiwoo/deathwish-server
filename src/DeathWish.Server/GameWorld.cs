@@ -8,7 +8,10 @@ namespace DeathWish.Server;
 public sealed class GameWorld
 {
     private const double SNAPSHOT_INTERVAL_SECONDS = 0.1;
+    private const double MICROSECONDS_PER_SECOND = 1_000_000;
     private const float FLOOR_SIDE_LENGTH_METERS = 100f;
+    private const float MIN_WALK_SPEED_METERS_PER_SECOND = 0.05f;
+    private const float CENTIDEGREES_PER_RADIAN = 18_000f / MathF.PI;
     private const int SPAWN_MIN_X_METERS = -7;
     private const int SPAWN_MAX_X_METERS = 24;
     private const int SPAWN_MIN_ABS_Z_METERS = 2;
@@ -35,6 +38,7 @@ public sealed class GameWorld
     private long _currentTick;
     private bool _stopped;
     private double _snapshotElapsedSeconds;
+    private double _simulationTimeSeconds;
 
     public int RoomId { get; }
     public long CurrentTick => Interlocked.Read(ref _currentTick);
@@ -72,6 +76,27 @@ public sealed class GameWorld
 
     /// <summary>Returns a defensive copy of the player states published after the last completed update.</summary>
     public PlayerState[] GetPlayers() => Volatile.Read(ref _publishedPlayers).ToArray();
+
+    /// <summary>
+    /// Writes the current animated world pose and oriented hitboxes for an active player into caller-owned storage.
+    /// Only the owning world loop may call this method. A missing player leaves the destination unchanged.
+    /// </summary>
+    internal bool TryGetPlayerAnimationPose(long playerId, Span<AnimationBonePose> destination)
+    {
+        Span<short> pitches = stackalloc short[AnimationRig.BONE_COUNT];
+        foreach ((WorldAdmission admission, WorldPlayer player) in _players)
+        {
+            if (player.State.PlayerId != playerId || admission.IsDeparted || admission.Session.IsDisconnected)
+            {
+                continue;
+            }
+
+            AnimationRig.SampleWalk(player.WalkPhaseSeconds, player.IsWalking, pitches);
+            AnimationRig.GetWorldPose(player.State.Position, player.YawCentidegrees, pitches, destination);
+            return true;
+        }
+        return false;
+    }
 
     /// <summary>Runs one synchronous update using a finite, positive delta in seconds. Only the owning world loop may call this method.</summary>
     internal void Tick(float deltaTimeSeconds)
@@ -126,6 +151,7 @@ public sealed class GameWorld
             Volatile.Write(ref _publishedPlayers, _players.Values.Select(player => player.State).ToArray());
         }
 
+        _simulationTimeSeconds += deltaTimeSeconds;
         _snapshotElapsedSeconds += deltaTimeSeconds;
         if (_snapshotElapsedSeconds >= SNAPSHOT_INTERVAL_SECONDS)
         {
@@ -186,18 +212,43 @@ public sealed class GameWorld
 
     private void BroadcastSnapshot(long serverTick)
     {
-        var players = _players.Where(pair => !pair.Key.IsDeparted && !pair.Key.Session.IsDisconnected)
-            .Select(pair => pair.Value.State)
-            .Select(state => new SnapshotPlayer(state.PlayerId, state.Position.X, state.Position.Y, state.Position.Z))
-            .OrderBy(player => player.PlayerId).ToArray();
-        byte[] frame = SnapshotCodec.Encode(new WorldSnapshot(RoomId, serverTick, players));
-        foreach (WorldAdmission admission in _players.Keys)
+        var activePlayers = _players.Where(pair => !pair.Key.IsDeparted && !pair.Key.Session.IsDisconnected)
+            .OrderBy(pair => pair.Value.State.PlayerId).ToArray();
+        var positions = new WorldSnapshot(RoomId, serverTick, activePlayers.Select(pair =>
         {
+            PlayerState state = pair.Value.State;
+            return new SnapshotPlayer(state.PlayerId, state.Position.X, state.Position.Y, state.Position.Z);
+        }).ToArray());
+
+        byte[]? positionFrame = null;
+        byte[]? animationFrame = null;
+        foreach (var pair in activePlayers)
+        {
+            WorldAdmission admission = pair.Key;
+            // Both formats use the same replaceable output slot. An animated frame holds position and pose together.
             if (!admission.IsDeparted && !admission.Session.IsDisconnected)
             {
+                byte[] frame = admission.ReceivesAnimation
+                    ? animationFrame ??= EncodeAnimationSnapshot(positions, activePlayers)
+                    : positionFrame ??= SnapshotCodec.Encode(positions);
                 admission.Session.SendSnapshot(frame);
             }
         }
+    }
+
+    private byte[] EncodeAnimationSnapshot(WorldSnapshot positions, KeyValuePair<WorldAdmission, WorldPlayer>[] activePlayers)
+    {
+        var poses = new AnimatedPlayer[activePlayers.Length];
+        for (int index = 0; index < activePlayers.Length; index++)
+        {
+            WorldPlayer player = activePlayers[index].Value;
+            var pitches = new short[AnimationRig.BONE_COUNT];
+            AnimationRig.SampleWalk(player.WalkPhaseSeconds, player.IsWalking, pitches);
+            poses[index] = new AnimatedPlayer(player.State.PlayerId, player.YawCentidegrees, pitches);
+        }
+
+        long serverTimeMicroseconds = checked((long)Math.Round(_simulationTimeSeconds * MICROSECONDS_PER_SECOND));
+        return AnimatedSnapshotCodec.Encode(new AnimatedWorldSnapshot(positions, serverTimeMicroseconds, poses));
     }
 
     private bool StepPhysics(float deltaTimeSeconds)
@@ -215,6 +266,7 @@ public sealed class GameWorld
             }
 
             Vector3 velocity = admission.Movement.GetDirection() * MOVEMENT_SPEED_METERS_PER_SECOND;
+            player.HasMovementIntent = velocity != Vector3.Zero;
             _physics.SetHorizontalVelocity(player.Body, velocity.X, velocity.Z);
             if (player.IsJumping && _physics.GetMotion(player.Body).VerticalVelocityMetersPerSecond <= 0 &&
                 _physics.HasGroundSupport(player.Body))
@@ -245,6 +297,7 @@ public sealed class GameWorld
             }
 
             Vector3 position = _physics.GetMotion(player.Body).FootPositionMeters;
+            UpdateAnimation(player, position - player.State.Position, deltaTimeSeconds);
             if (position != player.State.Position)
             {
                 player.State = player.State with { Position = position };
@@ -252,6 +305,21 @@ public sealed class GameWorld
             }
         }
         return changed;
+    }
+
+    private static void UpdateAnimation(WorldPlayer player, Vector3 travel, float deltaTimeSeconds)
+    {
+        var horizontalTravel = new Vector2(travel.X, travel.Z);
+        float distanceMeters = horizontalTravel.Length();
+        player.IsWalking = player.HasMovementIntent && distanceMeters > MIN_WALK_SPEED_METERS_PER_SECOND * deltaTimeSeconds;
+        if (!player.IsWalking)
+        {
+            return;
+        }
+
+        double walkSeconds = distanceMeters / (double)MOVEMENT_SPEED_METERS_PER_SECOND;
+        player.WalkPhaseSeconds = (player.WalkPhaseSeconds + walkSeconds) % AnimationRig.WALK_DURATION_SECONDS;
+        player.YawCentidegrees = checked((short)MathF.Round(MathF.Atan2(travel.X, travel.Z) * CENTIDEGREES_PER_RADIAN));
     }
 
     private void SendRaycastResult(ClientSession session, BodyHandle player, CameraRay ray)
@@ -283,6 +351,10 @@ public sealed class GameWorld
     private sealed class WorldPlayer(BodyHandle body, PlayerState state)
     {
         internal bool IsJumping { get; set; }
+        internal bool HasMovementIntent { get; set; }
+        internal bool IsWalking { get; set; }
+        internal double WalkPhaseSeconds { get; set; }
+        internal short YawCentidegrees { get; set; }
         internal BodyHandle Body { get; } = body;
         internal PlayerState State { get; set; } = state;
     }

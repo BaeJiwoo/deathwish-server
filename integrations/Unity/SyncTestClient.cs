@@ -19,12 +19,12 @@ namespace DeathWish.Client
         private const float LOOK_SENSITIVITY = 2f;
         private const float DEGREES_PER_TURN = 360f;
         private const float GIZMO_RADIUS_METERS = 0.35f;
-        private const float DEFAULT_PITCH_DEGREES = 22f;
-        private const float MIN_PITCH_DEGREES = 10f;
-        private const float MAX_PITCH_DEGREES = 65f;
-        private const float CAMERA_DISTANCE_METERS = 5f;
-        private const float CAMERA_HEIGHT_METERS = 1.5f;
-        private const float CAMERA_SIDE_OFFSET_METERS = 1.4f;
+        private const float DEFAULT_PITCH_DEGREES = 8f;
+        private const float MIN_PITCH_DEGREES = -65f;
+        private const float MAX_PITCH_DEGREES = 75f;
+        private const float CAMERA_CLEARANCE_METERS = 0.2f;
+        private static readonly Vector3 TrailOriginLocalMeters = new Vector3(0.25f, 1.24f, 0.36f);
+        private const string SHOULDER_PREF = "DeathWish.Camera.LeftShoulder";
         private const float FLOOR_SIZE_METERS = 100f;
         private const float LAB_WALL_OFFSET_METERS = 54f;
         private const float LAB_WALL_HEIGHT_METERS = 12f;
@@ -44,25 +44,40 @@ namespace DeathWish.Client
         [SerializeField] private Text _sessionText = null;
         [SerializeField] private Text _positionText = null;
         [SerializeField] private Text _inputText = null;
+        [SerializeField] private GameObject _connectionPanel = null;
+        [SerializeField] private GameObject _aimHud = null;
+        [SerializeField] private Text _shoulderLabel = null;
+        [SerializeField] private Text _aimResult = null;
+        [SerializeField] private ShoulderCameraSettings _shoulderCamera = new ShoulderCameraSettings();
+        [SerializeField] private bool _showRaycastGizmos = true;
+        [SerializeField, Tooltip("Subscribe to authoritative bone poses. Disable for older servers.")]
+        private bool _useServerAnimation = true;
 
         private readonly Dictionary<long, Vector3> _positions = new Dictionary<long, Vector3>();
         private readonly Dictionary<long, Vector3> _blendStarts = new Dictionary<long, Vector3>();
         private double _blendStartSeconds;
         private bool _hasSnapshot;
         private readonly Dictionary<long, Transform> _markers = new Dictionary<long, Transform>();
+        private readonly Dictionary<long, ServerCharacterView> _serverCharacters = new Dictionary<long, ServerCharacterView>();
+        private readonly ServerAnimationTimeline _animationTimeline = new ServerAnimationTimeline();
         private readonly List<long> _departedPlayers = new List<long>();
         private Transform _viewCamera;
+        private Camera _sceneCamera;
+        private bool _isLeftShoulder;
         private GameObject _flatMap;
         private GameObject _physicsLab;
         private readonly List<Mesh> _labMeshes = new List<Mesh>();
         private Mesh _playerMesh;
+        private Mesh _boxMesh;
         private Material _floorMaterial;
         private Material _wallMaterial;
+        private Material _cautionMaterial;
         private Material _localMaterial;
         private Material _remoteMaterial;
         private ConnectionTestClient _client;
         private CancellationTokenSource _cancellation;
         private string _status = "PhysicsLab preview | Disconnected";
+        private string _latestRayResult = string.Empty;
         private long _playerId;
         private long _lastTick;
         private uint _sequence;
@@ -71,9 +86,12 @@ namespace DeathWish.Client
         private float _nextInputSeconds;
         private bool _isConnecting;
         private bool _isSending;
+        private bool _usesServerAnimation;
         private int _captureFrame;
         private const int MAX_BUFFERED_ACTIONS = 16;
-        private readonly Queue<CameraRay?> _actions = new Queue<CameraRay?>();
+        private readonly Queue<ClientShot?> _actions = new Queue<ClientShot?>();
+        private readonly Queue<ClientShot> _sentShots = new Queue<ClientShot>();
+        private RaycastFeedback _feedback;
         private bool _hasFocus;
         private bool _isConfigured;
         private int _generation;
@@ -90,13 +108,23 @@ namespace DeathWish.Client
                 return;
             }
 
-            Camera sceneCamera = Camera.main;
+            _isLeftShoulder = PlayerPrefs.GetInt(SHOULDER_PREF, 0) != 0;
+            _shoulderCamera.Initialize();
+            UpdateShoulderLabel();
+            Shader feedbackShader = Resources.Load<Shader>("ShotFeedback");
+            if (feedbackShader != null && feedbackShader.isSupported)
+            {
+                _feedback = new RaycastFeedback(transform, feedbackShader);
+            }
+            _sceneCamera = Camera.main;
             Shader shader = Resources.Load<Shader>("SyncTestWorld");
             Mesh floorMesh = Resources.GetBuiltinResource<Mesh>("Plane.fbx");
             _playerMesh = Resources.GetBuiltinResource<Mesh>("Capsule.fbx");
-            if (sceneCamera != null && shader != null && shader.isSupported && floorMesh != null && _playerMesh != null)
+            _boxMesh = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
+            if (_sceneCamera != null && shader != null && shader.isSupported && floorMesh != null &&
+                _playerMesh != null && _boxMesh != null)
             {
-                _viewCamera = sceneCamera.transform;
+                _viewCamera = _sceneCamera.transform;
                 CreateWorldView(shader, floorMesh);
                 SelectMap(true);
             }
@@ -138,6 +166,7 @@ namespace DeathWish.Client
             var client = new ConnectionTestClient();
             _client = client;
             _status = "Connecting...";
+            bool useServerAnimation = _useServerAnimation;
             RefreshView();
             try
             {
@@ -145,7 +174,9 @@ namespace DeathWish.Client
                 {
                     timeout.CancelAfter(TimeSpan.FromSeconds(TIMEOUT_SECONDS));
                     await client.ConnectAsync(host, port, timeout.Token);
-                    JoinRoomResponse response = await client.JoinRoomAsync(room, timeout.Token);
+                    JoinRoomResponse response = useServerAnimation
+                        ? await client.JoinAnimatedRoomAsync(room, timeout.Token)
+                        : await client.JoinRoomAsync(room, timeout.Token);
                     if (response.Result != RoomJoinResult.Success)
                     {
                         throw new InvalidOperationException("Join failed: " + response.Result);
@@ -158,6 +189,7 @@ namespace DeathWish.Client
                     }
 
                     SelectMap(ack.IsPhysicsLab);
+                    _usesServerAnimation = useServerAnimation;
                     _playerId = ack.PlayerId;
                     _lastTick = ack.ServerTick;
                     _positions[_playerId] = new Vector3(ack.X, ack.Y, ack.Z);
@@ -209,19 +241,28 @@ namespace DeathWish.Client
             bool canControl = _hasFocus && Cursor.lockState == CursorLockMode.Locked;
             if (canControl)
             {
+                if (Input.GetKeyDown(KeyCode.Q))
+                {
+                    SwapShoulder();
+                }
                 _yawDegrees = Mathf.Repeat(_yawDegrees + Input.GetAxisRaw("Mouse X") * LOOK_SENSITIVITY, DEGREES_PER_TURN);
                 _pitchDegrees = Mathf.Clamp(_pitchDegrees - Input.GetAxisRaw("Mouse Y") * LOOK_SENSITIVITY,
                     MIN_PITCH_DEGREES, MAX_PITCH_DEGREES);
             }
 
-            WorldSnapshot snapshot = _client.LatestSnapshot;
-            if (snapshot != null && (!_hasSnapshot || snapshot.ServerTick > _lastTick))
+            if (!ReadSnapshot(Time.unscaledTimeAsDouble))
             {
-                ApplySnapshot(snapshot, Time.unscaledTimeAsDouble);
+                return;
             }
             while (_client.TryReadRaycastResult(out string result))
             {
                 _statusText.text = _status = result;
+                _latestRayResult = result;
+                if (_sentShots.Count > 0)
+                {
+                    ClientShot shot = _sentShots.Dequeue();
+                    _feedback?.Show(shot, result, Time.unscaledTime);
+                }
                 Debug.Log(result);
             }
             RefreshTelemetry();
@@ -255,13 +296,15 @@ namespace DeathWish.Client
                 {
                     timeout.CancelAfter(TimeSpan.FromSeconds(TIMEOUT_SECONDS));
                     bool hasAction = _actions.Count > 0;
-                    CameraRay? ray = hasAction ? _actions.Dequeue() : null;
+                    ClientShot? shot = hasAction ? _actions.Dequeue() : null;
                     await client.SendMoveAsync(input, timeout.Token);
                     if (hasAction && generation == _generation)
                     {
-                        if (ray.HasValue)
+                        if (shot.HasValue)
                         {
-                            await client.SendRayAsync(ray.Value, timeout.Token);
+                            // TCP replies follow send order. Register before awaiting a possibly synchronous response.
+                            _sentShots.Enqueue(shot.Value);
+                            await client.SendRayAsync(shot.Value.Request, timeout.Token);
                         }
                         else
                         {
@@ -296,9 +339,54 @@ namespace DeathWish.Client
             {
                 _blendStarts[player.Key] = DisplayPosition(player.Key, player.Value, fraction);
             }
+            _blendStartSeconds = nowSeconds;
+            SetPositions(snapshot);
+        }
+
+        private bool ReadSnapshot(double nowSeconds)
+        {
+            if (_usesServerAnimation)
+            {
+                AnimatedWorldSnapshot animated = _client.LatestAnimatedSnapshot;
+                if (animated == null || !IsNewSnapshot(animated.Positions))
+                {
+                    return true;
+                }
+
+                return ApplyAnimatedSnapshot(animated, nowSeconds);
+            }
+
+            WorldSnapshot snapshot = _client.LatestSnapshot;
+            if (snapshot != null && IsNewSnapshot(snapshot))
+            {
+                ApplySnapshot(snapshot, nowSeconds);
+            }
+            return true;
+        }
+
+        private bool IsNewSnapshot(WorldSnapshot snapshot)
+        {
+            return !_hasSnapshot || snapshot.ServerTick > _lastTick;
+        }
+
+        private bool ApplyAnimatedSnapshot(AnimatedWorldSnapshot snapshot, double nowSeconds)
+        {
+            if (snapshot.RigId != AnimationRig.RIG_ID)
+            {
+                Disconnect();
+                _status = "The server animation rig is incompatible with this client.";
+                RefreshView();
+                return false;
+            }
+            _animationTimeline.Add(snapshot, nowSeconds);
+            SetPositions(snapshot.Positions);
+            return true;
+        }
+
+        private void SetPositions(WorldSnapshot snapshot)
+        {
             _lastTick = snapshot.ServerTick;
             _hasSnapshot = true;
-            _blendStartSeconds = nowSeconds;
             _positions.Clear();
             foreach (SnapshotPlayer player in snapshot.Players)
             {
@@ -328,19 +416,18 @@ namespace DeathWish.Client
             _flatMap.transform.SetParent(transform, false);
             Vector3 meshSize = floorMesh.bounds.size;
             var floorScale = new Vector3(FLOOR_SIZE_METERS / meshSize.x, 1f, FLOOR_SIZE_METERS / meshSize.z);
-            CreateVisual("Grid floor", floorMesh, _flatMap.transform, Vector3.zero, floorScale, _floorMaterial);
+            CreateVisual("Grid floor", floorMesh, _flatMap.transform, Vector3.zero, floorScale, _floorMaterial, true);
 
-            Mesh panel = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
             _wallMaterial = new Material(shader);
             _wallMaterial.SetFloat("_Wall", 1f);
             float span = 2 * LAB_WALL_OFFSET_METERS;
             float height = LAB_WALL_HEIGHT_METERS;
             foreach (float side in new[] { -LAB_WALL_OFFSET_METERS, LAB_WALL_OFFSET_METERS })
             {
-                CreateVisual("Observation wall", panel, _flatMap.transform, new Vector3(0, height / 2, side),
-                    new Vector3(span, height, 0.4f), _wallMaterial);
-                CreateVisual("Observation wall", panel, _flatMap.transform, new Vector3(side, height / 2, 0),
-                    new Vector3(0.4f, height, span), _wallMaterial);
+                    CreateVisual("Observation wall", _boxMesh, _flatMap.transform, new Vector3(0, height / 2, side),
+                    new Vector3(span, height, 0.4f), _wallMaterial, true);
+                    CreateVisual("Observation wall", _boxMesh, _flatMap.transform, new Vector3(side, height / 2, 0),
+                    new Vector3(0.4f, height, span), _wallMaterial, true);
             }
         }
 
@@ -348,6 +435,7 @@ namespace DeathWish.Client
         private sealed class LabData
         {
             [DataMember(Name = "objects", IsRequired = true)] public LabObject[] Objects { get; set; }
+            [DataMember(Name = "caution")] public LabObject Caution { get; set; }
         }
 
         [DataContract]
@@ -378,24 +466,14 @@ namespace DeathWish.Client
                     _physicsLab.transform.SetParent(transform, false);
                     foreach (LabObject part in data.Objects)
                     {
-                        var mesh = new Mesh { name = part.Name };
-                        _labMeshes.Add(mesh);
-                        mesh.vertices = Array.ConvertAll(part.Vertices, xyz => new Vector3(xyz[0], xyz[1], xyz[2]));
-                        var indices = new int[part.Triangles.Length * 3];
-                        for (int i = 0; i < part.Triangles.Length; i++)
-                        {
-                            // The export defines the front normal as AC x AB. Unity draws AB x AC.
-                            int[] triangle = part.Triangles[i];
-                            int offset = i * 3;
-                            indices[offset] = triangle[0];
-                            indices[offset + 1] = triangle[2];
-                            indices[offset + 2] = triangle[1];
-                        }
-                        mesh.triangles = indices;
-                        mesh.RecalculateNormals();
-                        mesh.RecalculateBounds();
                         Material material = part.Name == "Torus" ? _remoteMaterial : _floorMaterial;
-                        CreateVisual(part.Name, mesh, _physicsLab.transform, Vector3.zero, Vector3.one, material);
+                        CreateLabPart(part, material, true);
+                    }
+                    if (data.Caution != null)
+                    {
+                        _cautionMaterial = new Material(_floorMaterial);
+                        _cautionMaterial.SetFloat("_Caution", 1f);
+                        CreateLabPart(data.Caution, _cautionMaterial, false);
                     }
                 }
             }
@@ -406,8 +484,29 @@ namespace DeathWish.Client
             }
         }
 
+        private void CreateLabPart(LabObject part, Material material, bool blocksCamera)
+        {
+            var mesh = new Mesh { name = part.Name };
+            _labMeshes.Add(mesh);
+            mesh.vertices = Array.ConvertAll(part.Vertices, xyz => new Vector3(xyz[0], xyz[1], xyz[2]));
+            var indices = new int[part.Triangles.Length * 3];
+            for (int i = 0; i < part.Triangles.Length; i++)
+            {
+                // The export uses AC x AB; Unity draws AB x AC.
+                int[] triangle = part.Triangles[i];
+                int offset = i * 3;
+                indices[offset] = triangle[0];
+                indices[offset + 1] = triangle[2];
+                indices[offset + 2] = triangle[1];
+            }
+            mesh.triangles = indices;
+            mesh.RecalculateNormals();
+            CreateVisual(part.Name, mesh, _physicsLab.transform, Vector3.zero, Vector3.one, material, blocksCamera);
+        }
+
         private void LateUpdate()
         {
+            _feedback?.Update(Time.unscaledTime);
             RenderWorld(Time.unscaledTimeAsDouble);
             if (_playerId == 0 || !_hasFocus || Cursor.lockState != CursorLockMode.Locked ||
                 Time.frameCount == _captureFrame)
@@ -419,13 +518,15 @@ namespace DeathWish.Client
             {
                 _actions.Enqueue(null);
             }
-            if (Input.GetMouseButtonDown(0) && _actions.Count < MAX_BUFFERED_ACTIONS &&
+            if (Input.GetMouseButtonDown(0) && _sentShots.Count + _actions.Count < MAX_BUFFERED_ACTIONS &&
                 _viewCamera != null && _markers.TryGetValue(_playerId, out Transform marker))
             {
                 Vector3 offset = _viewCamera.position - marker.position;
-                Vector3 forward = _viewCamera.forward;
-                _actions.Enqueue(new CameraRay(new System.Numerics.Vector3(offset.x, offset.y, offset.z),
-                    new System.Numerics.Vector3(forward.x, forward.y, forward.z)));
+                Vector3 forward = _sceneCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f)).direction;
+                var request = new CameraRay(new System.Numerics.Vector3(offset.x, offset.y, offset.z),
+                    new System.Numerics.Vector3(forward.x, forward.y, forward.z));
+                _actions.Enqueue(new ClientShot(request, new Ray(_viewCamera.position, forward),
+                    marker.TransformPoint(TrailOriginLocalMeters)));
             }
         }
 
@@ -449,9 +550,11 @@ namespace DeathWish.Client
             {
                 _markers.Remove(playerId);
                 _blendStarts.Remove(playerId);
+                _serverCharacters.Remove(playerId);
             }
 
             float fraction = BlendFraction(nowSeconds);
+            bool hasAnimation = _animationTimeline.TrySample(nowSeconds, out AnimationRenderSample animation);
             foreach (var player in _positions)
             {
                 bool isLocalPlayer = player.Key == _playerId;
@@ -459,15 +562,25 @@ namespace DeathWish.Client
                 {
                     marker = new GameObject(isLocalPlayer ? $"Me {player.Key}" : $"Player {player.Key}").transform;
                     marker.SetParent(transform, false);
-                    CreateVisual("Body", _playerMesh, marker, Vector3.up * 0.9f,
-                        new Vector3(0.65f, 0.9f, 0.65f), isLocalPlayer ? _localMaterial : _remoteMaterial);
+                    if (!_usesServerAnimation)
+                    {
+                        CreateVisual("Body", _playerMesh, marker, Vector3.up * 0.9f,
+                            new Vector3(0.65f, 0.9f, 0.65f), isLocalPlayer ? _localMaterial : _remoteMaterial);
+                    }
                     _markers.Add(player.Key, marker);
                 }
 
-                marker.position = DisplayPosition(player.Key, player.Value, fraction);
                 if (isLocalPlayer)
                 {
                     marker.rotation = Quaternion.Euler(0f, _yawDegrees, 0f);
+                }
+                if (_usesServerAnimation)
+                {
+                    RenderAnimatedPlayer(marker, player.Key, player.Value, hasAnimation, animation, isLocalPlayer);
+                }
+                else
+                {
+                    marker.position = DisplayPosition(player.Key, player.Value, fraction);
                 }
             }
 
@@ -481,14 +594,63 @@ namespace DeathWish.Client
             Vector3 position = _markers.TryGetValue(_playerId, out Transform localMarker) ? localMarker.position : Vector3.zero;
             Quaternion yaw = Quaternion.Euler(0f, _yawDegrees, 0f);
             Quaternion orbit = Quaternion.Euler(_pitchDegrees, _yawDegrees, 0f);
-            Vector3 pivot = position + Vector3.up * CAMERA_HEIGHT_METERS;
-            // Frame the local player to the right of the connection panel.
-            pivot -= yaw * Vector3.right * CAMERA_SIDE_OFFSET_METERS;
-            _viewCamera.SetPositionAndRotation(pivot + orbit * Vector3.back * CAMERA_DISTANCE_METERS, orbit);
+            Vector3 pivot = position + Vector3.up * _shoulderCamera.HeightMeters;
+            float side = _isLeftShoulder ? -1f : 1f;
+            Vector3 boom = orbit * Vector3.back * _shoulderCamera.DistanceMeters +
+                yaw * Vector3.right * (side * _shoulderCamera.SideMeters);
+            if (Physics.SphereCast(pivot, CAMERA_CLEARANCE_METERS, boom.normalized, out RaycastHit hit,
+                boom.magnitude, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            {
+                boom = boom.normalized * hit.distance;
+            }
+            _viewCamera.SetPositionAndRotation(pivot + boom, orbit);
+        }
+
+        private void RenderAnimatedPlayer(Transform marker, long id, Vector3 position, bool hasAnimation,
+            AnimationRenderSample sample, bool isLocalPlayer)
+        {
+            if (!hasAnimation || !sample.TryGetPlayer(id, out AnimationFramePlayer previous, out AnimationFramePlayer next))
+            {
+                marker.position = position;
+                if (marker.gameObject.activeSelf)
+                {
+                    marker.gameObject.SetActive(false);
+                }
+                return;
+            }
+
+            if (!_serverCharacters.TryGetValue(id, out ServerCharacterView character))
+            {
+                character = new ServerCharacterView(marker, _boxMesh, isLocalPlayer ? _localMaterial : _remoteMaterial);
+                _serverCharacters.Add(id, character);
+            }
+
+            marker.position = Vector3.Lerp(previous.Position, next.Position, sample.Fraction);
+            character.Apply(previous.Pose, next.Pose, sample.Fraction);
+            if (!marker.gameObject.activeSelf)
+            {
+                marker.gameObject.SetActive(true);
+            }
+        }
+
+        public void SwapShoulder()
+        {
+            _isLeftShoulder = !_isLeftShoulder;
+            PlayerPrefs.SetInt(SHOULDER_PREF, _isLeftShoulder ? 1 : 0);
+            PlayerPrefs.Save();
+            UpdateShoulderLabel();
+        }
+
+        private void UpdateShoulderLabel()
+        {
+            if (_shoulderLabel != null)
+            {
+                _shoulderLabel.text = _isLeftShoulder ? "Shoulder: Left [Q]" : "Shoulder: Right [Q]";
+            }
         }
 
         private static void CreateVisual(string name, Mesh mesh, Transform parent,
-            Vector3 offsetMeters, Vector3 scale, Material material)
+            Vector3 offsetMeters, Vector3 scale, Material material, bool blocksCamera = false)
         {
             var visual = new GameObject(name);
             visual.transform.SetParent(parent, false);
@@ -496,10 +658,19 @@ namespace DeathWish.Client
             visual.transform.localScale = scale;
             visual.AddComponent<MeshFilter>().sharedMesh = mesh;
             visual.AddComponent<MeshRenderer>().sharedMaterial = material;
+            if (blocksCamera)
+            {
+                visual.AddComponent<MeshCollider>().sharedMesh = mesh;
+            }
         }
 
         private static void RemoveMarker(Transform marker)
         {
+            if (marker == null)
+            {
+                return;
+            }
+
             marker.gameObject.SetActive(false);
             Destroy(marker.gameObject);
         }
@@ -546,10 +717,20 @@ namespace DeathWish.Client
             }
 
             _sessionText.text = $"Player ID: {_playerId}    Tick: {_lastTick}    Players: {_positions.Count}";
-            _positionText.text = _playerId != 0 && _positions.TryGetValue(_playerId, out Vector3 position)
+            Vector3 position = Vector3.zero;
+            _positionText.text = _playerId != 0 && _positions.TryGetValue(_playerId, out position)
                 ? "My server position (m)\n" + FormatPosition(position)
                 : "My server position (m)\nX: --    Y: --    Z: --";
             bool canControl = _hasFocus && Cursor.lockState == CursorLockMode.Locked && _playerId != 0;
+            if (_aimHud != null && _connectionPanel != null)
+            {
+                _aimHud.SetActive(canControl);
+                _connectionPanel.SetActive(!canControl);
+                if (canControl && _aimResult != null)
+                {
+                    _aimResult.text = FormatPosition(position) + "\n" + _latestRayResult;
+                }
+            }
             _inputText.text = string.Format(CultureInfo.InvariantCulture, "Input: {0}    Yaw: {1:F1} deg",
                 canControl ? "WASD / Space jump / LMB ray / Esc" : "Released", _yawDegrees);
         }
@@ -563,6 +744,10 @@ namespace DeathWish.Client
             }
 
             Color previousColor = Gizmos.color;
+            if (_showRaycastGizmos)
+            {
+                _feedback?.DrawGizmos(Time.unscaledTime);
+            }
             foreach (var player in _positions)
             {
                 bool isLocalPlayer = player.Key == _playerId;
@@ -608,12 +793,14 @@ namespace DeathWish.Client
 
         private void OnDestroy()
         {
+            _feedback?.Dispose();
             foreach (Mesh mesh in _labMeshes)
             {
                 Destroy(mesh);
             }
             Destroy(_floorMaterial);
             Destroy(_wallMaterial);
+            Destroy(_cautionMaterial);
             Destroy(_localMaterial);
             Destroy(_remoteMaterial);
         }
@@ -632,6 +819,7 @@ namespace DeathWish.Client
             _client = null;
             _isConnecting = false;
             _isSending = false;
+            _usesServerAnimation = false;
             _playerId = 0;
             _lastTick = 0;
             _hasSnapshot = false;
@@ -640,11 +828,16 @@ namespace DeathWish.Client
             _pitchDegrees = DEFAULT_PITCH_DEGREES;
             _positions.Clear();
             _blendStarts.Clear();
+            _animationTimeline.Clear();
+            _latestRayResult = string.Empty;
+            _sentShots.Clear();
+            _feedback?.Clear();
             foreach (Transform marker in _markers.Values)
             {
                 RemoveMarker(marker);
             }
             _markers.Clear();
+            _serverCharacters.Clear();
             cancellation?.Cancel();
             client?.Dispose();
             cancellation?.Dispose();

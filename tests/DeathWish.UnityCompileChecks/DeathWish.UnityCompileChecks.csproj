@@ -9,11 +9,15 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../integrations/Unity/SyncTestClient.cs" />
+    <Compile Include="../../integrations/Unity/RaycastFeedback.cs" />
+    <Compile Include="../../integrations/Unity/ShoulderCameraSettings.cs" />
+    <Compile Include="../../integrations/Unity/ServerAnimationView.cs" />
     <ProjectReference Include="../../mockclient/DeathWish.MockClient.Core/DeathWish.MockClient.Core.csproj" />
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.CoreModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.dll</HintPath></Reference>
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.IMGUIModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.InputLegacyModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.PhysicsModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.UI"><HintPath>$(UnityUiAssembly)</HintPath></Reference>
     <Reference Include="UnityEngine.UIModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.UIModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.TextRenderingModule.dll</HintPath></Reference>

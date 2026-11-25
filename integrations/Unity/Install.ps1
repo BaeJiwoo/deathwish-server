@@ -21,6 +21,7 @@ if ($package.name -ne 'com.unity.ugui' -or $package.version -ne '2.0.0') {
 $manifestPath = Join-Path $project 'Packages/manifest.json'
 $manifest = [IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
 $existingUiVersion = $manifest.dependencies.'com.unity.ugui'
+$existingPhysicsVersion = $manifest.dependencies.'com.unity.modules.physics'
 if ($null -ne $existingUiVersion -and $existingUiVersion -ne $package.version) {
     throw 'The project has a different uGUI version. Resolve the version before installing this scene.'
 }
@@ -48,15 +49,36 @@ foreach ($legacy in $legacyPaths) {
 if ($LASTEXITCODE -ne 0) { throw 'Client build failed. The manifest repair has completed; integration files were not changed.' }
 New-Item -ItemType Directory -Force -Path (Join-Path $destination 'Scenes'), (Join-Path $destination 'Resources') | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'maps/PhysicsLab/PhysicsLab.json') -Destination (Join-Path $destination 'Resources') -Force
-foreach ($file in @('SyncTestWorld.shader', 'SyncTestWorld.shader.meta')) {
+foreach ($file in @('SyncTestWorld.shader', 'SyncTestWorld.shader.meta', 'ShotFeedback.shader', 'ShotFeedback.shader.meta')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Resources/$file") -Destination (Join-Path $destination 'Resources') -Force
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'SyncTestClient.cs') -Destination $destination -Force
+foreach ($file in @('RaycastFeedback.cs', 'RaycastFeedback.cs.meta', 'ShoulderCameraSettings.cs', 'ShoulderCameraSettings.cs.meta',
+    'ServerAnimationView.cs', 'ServerAnimationView.cs.meta')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $destination -Force
+}
 if (!(Test-Path -LiteralPath $scriptMeta)) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'SyncTestClient.cs.meta') -Destination $scriptMeta
 }
-# Preserve scene layout and Inspector wiring customized after the first installation.
-if (!(Test-Path -LiteralPath $scenePath)) {
+# Upgrade either previously shipped scene, including a checkout with Windows newlines.
+# A customized scene keeps its layout and Inspector references.
+$installScene = !(Test-Path -LiteralPath $scenePath)
+if (!$installScene) {
+    $sceneText = [IO.File]::ReadAllText($scenePath).Replace("`r`n", "`n")
+    if (!$sceneText.Contains('_shoulderCamera:')) {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($sceneText))).Replace('-', '')
+        } finally {
+            $sha.Dispose()
+        }
+        $installScene = $hash -in @('70E9DCC3D332E57016F51391E7D445709A642AE853EDA3D3A548F97AE56154D4', 'D5BB4B7D7731F549142E4247862C07426229C181496409C4208F6C8DFB872F72', 'BA1B78065CC506490DD1A7A360DA421E9D928DA399DCE909AFF21DEBBDE45C44', '13BCED15CE471E1FD294DA1810F26D31764C8DC21846C689EE2D8D4C188D44DA')
+        if (!$installScene) {
+            Write-Warning 'Custom scene preserved. Merge the camera position inputs and HUD from the supplied scene and wire their SyncTestClient references.'
+        }
+    }
+}
+if ($installScene) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Scenes/SyncTestScene.unity') -Destination $scenePath
 }
 if (!(Test-Path -LiteralPath ($scenePath + '.meta'))) {
@@ -77,7 +99,10 @@ foreach ($legacy in $legacyPaths) {
         }
     }
 }
-$manifest.dependencies | Add-Member -NotePropertyName $package.name -NotePropertyValue $package.version -Force
-[IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 100), (New-Object System.Text.UTF8Encoding($false)))
+if ($null -eq $existingUiVersion -or $existingPhysicsVersion -ne '1.0.0') {
+    $manifest.dependencies | Add-Member -NotePropertyName $package.name -NotePropertyValue $package.version -Force
+    $manifest.dependencies | Add-Member -NotePropertyName 'com.unity.modules.physics' -NotePropertyValue '1.0.0' -Force
+    [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 100), (New-Object System.Text.UTF8Encoding($false)))
+}
 Write-Host 'Installed. Open Assets/DeathWishMovement/Scenes/SyncTestScene.unity. Canvas is already in the scene.'
 Write-Host 'Enter Play mode, Connect and join, then Capture input. Use WASD and mouse look in the third-person Game view.'

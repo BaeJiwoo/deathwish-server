@@ -22,7 +22,8 @@ public sealed class ConnectionTestClient : IDisposable
     private Exception? _disconnectError;
     private readonly TaskCompletionSource<JoinAck> _admission = new TaskCompletionSource<JoinAck>(TaskCreationOptions.RunContinuationsAsynchronously);
     private int? _acceptedRoom;
-    private int? _requestedRoom;
+    private JoinRoomRequest? _requestedJoin;
+    private bool _receivesAnimation;
     private bool _isSendingInput;
     private const int MAX_RAYCAST_RESULTS = 64;
     private readonly System.Collections.Generic.Queue<string> _raycastResults = new System.Collections.Generic.Queue<string>();
@@ -35,6 +36,7 @@ public sealed class ConnectionTestClient : IDisposable
         }
     }
     private WorldSnapshot? _latestSnapshot;
+    private AnimatedWorldSnapshot? _latestAnimatedSnapshot;
 
     /// <summary>Returns the latest immutable full snapshot, or null before the first snapshot. Safe to read from the UI thread.</summary>
     public WorldSnapshot? LatestSnapshot
@@ -44,6 +46,18 @@ public sealed class ConnectionTestClient : IDisposable
             lock (_sync)
             {
                 return _latestSnapshot;
+            }
+        }
+    }
+
+    /// <summary>Returns the latest immutable animation and position snapshot. Safe to read from the UI thread.</summary>
+    public AnimatedWorldSnapshot? LatestAnimatedSnapshot
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _latestAnimatedSnapshot;
             }
         }
     }
@@ -122,15 +136,17 @@ public sealed class ConnectionTestClient : IDisposable
     }
 
     /// <summary>Requests a positive room ID. Admission failures are returned normally. Cancellation closes the connection.</summary>
-    public Task<JoinRoomResponse> JoinRoomAsync(int roomId, CancellationToken cancellationToken)
+    public Task<JoinRoomResponse> JoinRoomAsync(int roomId, CancellationToken cancellationToken) =>
+        JoinAsync(new JoinRoomRequest(roomId), cancellationToken);
+
+    /// <summary>Requests animated snapshots from a compatible server. Cancellation closes the connection.</summary>
+    public Task<JoinRoomResponse> JoinAnimatedRoomAsync(int roomId, CancellationToken cancellationToken) =>
+        JoinAsync(new JoinRoomRequest(roomId, true), cancellationToken);
+
+    private Task<JoinRoomResponse> JoinAsync(JoinRoomRequest request, CancellationToken cancellationToken)
     {
-        byte[] payload = PacketCodec.EncodeJoinRoomRequest(new JoinRoomRequest(roomId));
-        return RequestAsync(payload, MessageType.JoinRoomResponse, response =>
-        {
-            JoinRoomResponse result = PacketCodec.DecodeJoinRoomResponse(response);
-            if (result.RoomId != roomId) throw new InvalidDataException("Room response does not match the requested room.");
-            return result;
-        }, cancellationToken);
+        byte[] payload = PacketCodec.EncodeJoinRoomRequest(request);
+        return RequestAsync(payload, MessageType.JoinRoomResponse, PacketCodec.DecodeJoinRoomResponse, cancellationToken, request);
     }
 
     /// <summary>Sends input after JoinAck without waiting for a response. Await all other sends/requests first; cancellation closes the connection.</summary>
@@ -187,7 +203,7 @@ public sealed class ConnectionTestClient : IDisposable
     }
 
     private async Task<T> RequestAsync<T>(byte[] payload, MessageType expectedResponse,
-        Func<byte[], T> decode, CancellationToken cancellationToken)
+        Func<byte[], T> decode, CancellationToken cancellationToken, JoinRoomRequest? join = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -201,8 +217,7 @@ public sealed class ConnectionTestClient : IDisposable
                 throw new InvalidOperationException("A send or request is already pending.");
             }
             _expectedResponse = expectedResponse;
-            _requestedRoom = expectedResponse == MessageType.JoinRoomResponse
-                ? PacketCodec.DecodeJoinRoomRequest(payload.AsSpan(PacketCodec.HEADER_SIZE).ToArray()).RoomId : (int?)null;
+            _requestedJoin = join;
             _pendingResponse = response;
         }
 
@@ -262,26 +277,9 @@ public sealed class ConnectionTestClient : IDisposable
                             _raycastResults.Enqueue(PacketCodec.DecodeEcho(payload));
                             return;
                         }
-                        if (type == MessageType.WorldSnapshot)
+                        if (type == MessageType.WorldSnapshot || type == MessageType.AnimatedWorldSnapshot)
                         {
-                            WorldSnapshot snapshot = SnapshotCodec.Decode(payload);
-                            bool hasAdmission = _admission.Task.Status == TaskStatus.RanToCompletion;
-                            if (!hasAdmission || snapshot.RoomId != _acceptedRoom ||
-                                snapshot.ServerTick < _admission.Task.Result.ServerTick ||
-                                (_latestSnapshot != null && snapshot.ServerTick <= _latestSnapshot.ServerTick))
-                            {
-                                throw new InvalidDataException("Unexpected world snapshot.");
-                            }
-                            bool hasLocalPlayer = false;
-                            foreach (SnapshotPlayer player in snapshot.Players)
-                            {
-                                hasLocalPlayer |= player.PlayerId == _admission.Task.Result.PlayerId;
-                            }
-                            if (!hasLocalPlayer)
-                            {
-                                throw new InvalidDataException("Snapshot is missing the admitted player.");
-                            }
-                            _latestSnapshot = snapshot;
+                            ReceiveSnapshot(type, payload);
                             return;
                         }
                         if (type == MessageType.JoinAck)
@@ -294,8 +292,22 @@ public sealed class ConnectionTestClient : IDisposable
                         if (_pendingResponse != null && type == _expectedResponse && type == MessageType.JoinRoomResponse)
                         {
                             JoinRoomResponse response = PacketCodec.DecodeJoinRoomResponse(payload);
-                            if (response.RoomId != _requestedRoom) throw new InvalidDataException("Room response does not match the request.");
-                            if (response.Result == RoomJoinResult.Success) _acceptedRoom = response.RoomId;
+                            if (_requestedJoin is not JoinRoomRequest join || response.RoomId != join.RoomId)
+                            {
+                                throw new InvalidDataException("Room response does not match the request.");
+                            }
+                            if (response.Result == RoomJoinResult.Success)
+                            {
+                                if (_acceptedRoom.HasValue && _acceptedRoom.Value != response.RoomId)
+                                {
+                                    throw new InvalidDataException("The server changed an admitted connection's room.");
+                                }
+                                if (!_acceptedRoom.HasValue)
+                                {
+                                    _acceptedRoom = response.RoomId;
+                                    _receivesAnimation = join.ReceivesAnimation;
+                                }
+                            }
                         }
                         if (_pendingResponse == null || type != _expectedResponse || !_pendingResponse.TrySetResult(payload))
                             throw new InvalidDataException("Unexpected response.");
@@ -307,6 +319,38 @@ public sealed class ConnectionTestClient : IDisposable
         {
             Close(exception);
         }
+    }
+
+    // Called only by the receive loop under the connection lock.
+    private void ReceiveSnapshot(MessageType type, byte[] payload)
+    {
+        bool includesAnimation = type == MessageType.AnimatedWorldSnapshot;
+        if (includesAnimation != _receivesAnimation || _admission.Task.Status != TaskStatus.RanToCompletion)
+        {
+            throw new InvalidDataException("Unexpected world snapshot format or admission order.");
+        }
+
+        AnimatedWorldSnapshot? animation = includesAnimation ? AnimatedSnapshotCodec.Decode(payload) : null;
+        WorldSnapshot snapshot = animation?.Positions ?? SnapshotCodec.Decode(payload);
+        JoinAck admission = _admission.Task.Result;
+        if (snapshot.RoomId != _acceptedRoom || snapshot.ServerTick < admission.ServerTick ||
+            (_latestSnapshot != null && snapshot.ServerTick <= _latestSnapshot.ServerTick) ||
+            (animation != null && _latestAnimatedSnapshot != null &&
+                animation.ServerTimeMicroseconds <= _latestAnimatedSnapshot.ServerTimeMicroseconds))
+        {
+            throw new InvalidDataException("Unexpected world snapshot clock or room.");
+        }
+
+        foreach (SnapshotPlayer player in snapshot.Players)
+        {
+            if (player.PlayerId == admission.PlayerId)
+            {
+                _latestSnapshot = snapshot;
+                _latestAnimatedSnapshot = animation;
+                return;
+            }
+        }
+        throw new InvalidDataException("Snapshot is missing the admitted player.");
     }
 
     private void Close(Exception? error)

@@ -242,4 +242,12 @@ powershell -ExecutionPolicy Bypass -File .\integrations\Unity\Install.ps1 -Unity
 - [ ] 서버 종료를 클라이언트가 감지하고, 서버 재실행·재접속도 성공한다.
 - [ ] 자동 테스트가 생략 없이 종료 코드 0으로 완료된다.
 
-관련 문서: [프로토콜](Protocol.md), [구현 계획](ImplementationPlan.md), [Unity 연동 상세](../integrations/Unity/README.md), [개발 기록](devlog/README.md).
+## 11. 서버 권위 걷기 애니메이션
+
+서버와 Unity 클라이언트의 `codex/server-authoritative-animation` 브랜치로 접속합니다. Unity의 **Use Server Animation**은 기본으로 활성화되며 일반 MockClient 접속도 같은 방에 참여할 수 있습니다. 서버가 실제 수평 이동으로 방향과 걷기 위상을 계산하므로 움직임이 멈추거나 벽에 막히면 캐릭터가 정지 자세로 표시됩니다.
+
+`python3 tools/animation/bake_walk.py --check`로 60 Hz 걷기 테이블의 재현성을 확인할 수 있습니다. 전체 ConnectionTests는 프레임 경계, 기존 접속과 애니메이션 접속 혼용, 지연 입력 만료, 세계 좌표 히트박스를 검사합니다.
+
+Unity 배치 검증은 별도 클라이언트 복사본의 `Assets/Editor`에 `ServerAnimationSceneCheck.cs`와 `ServerAnimationPoseReferenceCheck.cs`를 넣고 `-executeMethod DeathWish.Client.Editor.ServerAnimationSceneCheck.Run`으로 실행합니다. `DW_ANIMATION_TEST_PORT`에 방 1을 사용할 서버의 로컬 TCP 포트를 지정하면 실제 접속과 원격 관절 이동도 검증합니다.
+
+관련 문서 [프로토콜](Protocol.md), [구현 계획](ImplementationPlan.md), [Unity 연동 상세](../integrations/Unity/README.md), [개발 기록](devlog/README.md).

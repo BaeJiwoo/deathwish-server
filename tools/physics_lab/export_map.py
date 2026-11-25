@@ -38,7 +38,7 @@ def extract_object(obj, depsgraph, meters_per_unit):
         evaluated.to_mesh_clear()
 
 
-def write_map(destination, objects):
+def write_map(destination, objects, caution):
     def rows(items):
         return ",\n".join("        " + json.dumps(row, allow_nan=False) for row in items)
 
@@ -49,9 +49,10 @@ def write_map(destination, objects):
             + ',\n      "vertices": [\n' + rows(obj["vertices"])
             + '\n      ],\n      "triangles": [\n' + rows(obj["triangles"]) + '\n      ]\n    }'
         )
+    decoration = ',\n  "caution": ' + json.dumps(caution, allow_nan=False) if caution else ''
     content = ('{\n  "version": 1,\n  "units": "meters",\n  "upAxis": "Y",\n'
                '  "frontFace": "clockwise",\n  "objects": [\n'
-               + ",\n".join(blocks) + '\n  ]\n}\n')
+               + ",\n".join(blocks) + '\n  ]' + decoration + '\n}\n')
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(content, encoding="utf-8", newline="\n")
 
@@ -64,11 +65,21 @@ def main():
         parser.error("output must be a JSON file")
     scene = bpy.context.scene
     depsgraph = bpy.context.evaluated_depsgraph_get()
-    objects = [extract_object(obj, depsgraph, scene.unit_settings.scale_length)
-               for obj in sorted(scene.objects, key=lambda item: item.name) if obj.type == "MESH"]
+    objects = []
+    caution = None
+    for obj in sorted(scene.objects, key=lambda item: item.name):
+        if obj.type != "MESH":
+            continue
+        mesh = extract_object(obj, depsgraph, scene.unit_settings.scale_length)
+        if obj.get("deathwish_caution"):
+            if caution is not None:
+                raise ValueError("Expected one combined caution mesh")
+            caution = mesh
+        else:
+            objects.append(mesh)
     if not objects:
         raise ValueError("scene has no mesh objects")
-    write_map(args.output, objects)
+    write_map(args.output, objects, caution)
 
 
 main()

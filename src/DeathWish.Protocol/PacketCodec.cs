@@ -16,12 +16,15 @@ public enum MessageType : byte
     WorldSnapshot = 7,
     Jump = 8,
     CameraRay = 9,
-    RaycastResult = 10
+    RaycastResult = 10,
+    AnimatedWorldSnapshot = 17
 }
 
 public static class PacketCodec
 {
     private const int JOIN_ACK_BASE_SIZE = 32;
+    private const int JOIN_ROOM_ID_SIZE = sizeof(int);
+    private const byte ANIMATED_JOIN_FLAG = 1;
     private const byte PHYSICS_LAB_MAP_ID = 1;
     private const int MOVE_INPUT_PAYLOAD_SIZE = 12;
     private const int MOVE_SEQUENCE_OFFSET = 0;
@@ -75,19 +78,29 @@ public static class PacketCodec
     public static byte[] EncodeJoinRoomRequest(JoinRoomRequest request)
     {
         ValidateRoomId(request.RoomId);
-        byte[] frame = new byte[HEADER_SIZE + 4];
-        frame[1] = 4;
+        int length = request.ReceivesAnimation ? JOIN_ROOM_ID_SIZE + 1 : JOIN_ROOM_ID_SIZE;
+        byte[] frame = new byte[HEADER_SIZE + length];
+        frame[1] = (byte)length;
         frame[2] = (byte)MessageType.JoinRoomRequest;
-        BinaryPrimitives.WriteInt32BigEndian(frame.AsSpan(HEADER_SIZE, 4), request.RoomId);
+        BinaryPrimitives.WriteInt32BigEndian(frame.AsSpan(HEADER_SIZE, JOIN_ROOM_ID_SIZE), request.RoomId);
+        if (request.ReceivesAnimation)
+        {
+            frame[HEADER_SIZE + JOIN_ROOM_ID_SIZE] = ANIMATED_JOIN_FLAG;
+        }
         return frame;
     }
 
     public static JoinRoomRequest DecodeJoinRoomRequest(byte[] payload)
     {
-        ValidatePayloadLength(payload, 4);
+        if (payload == null)
+        {
+            throw new ArgumentNullException(nameof(payload));
+        }
+        bool receivesAnimation = payload.Length == JOIN_ROOM_ID_SIZE + 1 && payload[JOIN_ROOM_ID_SIZE] == ANIMATED_JOIN_FLAG;
+        ValidatePayloadLength(payload, receivesAnimation ? JOIN_ROOM_ID_SIZE + 1 : JOIN_ROOM_ID_SIZE);
         int roomId = BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan());
         ValidateRoomId(roomId);
-        return new JoinRoomRequest(roomId);
+        return new JoinRoomRequest(roomId, receivesAnimation);
     }
 
     public static byte[] EncodeJoinRoomResponse(JoinRoomResponse response)
@@ -185,7 +198,7 @@ public static class PacketCodec
         if (type != MessageType.EchoRequest && type != MessageType.EchoResponse &&
             type != MessageType.JoinRoomRequest && type != MessageType.JoinRoomResponse && type != MessageType.JoinAck &&
             type != MessageType.MoveInput && type != MessageType.WorldSnapshot && type != MessageType.Jump &&
-            type != MessageType.CameraRay && type != MessageType.RaycastResult)
+            type != MessageType.CameraRay && type != MessageType.RaycastResult && type != MessageType.AnimatedWorldSnapshot)
             throw new InvalidDataException("Unknown message type.");
     }
 }
@@ -217,7 +230,12 @@ public sealed class PacketReader
 
                 _type = (MessageType)_header[2];
                 PacketCodec.ValidateType(_type);
-                int maximum = _type == MessageType.WorldSnapshot ? SnapshotCodec.MAX_PAYLOAD_LENGTH : PacketCodec.MAX_PAYLOAD_LENGTH;
+                int maximum = _type switch
+                {
+                    MessageType.WorldSnapshot => SnapshotCodec.MAX_PAYLOAD_LENGTH,
+                    MessageType.AnimatedWorldSnapshot => AnimatedSnapshotCodec.MAX_PAYLOAD_LENGTH,
+                    _ => PacketCodec.MAX_PAYLOAD_LENGTH
+                };
                 if (length > maximum)
                 {
                     throw new InvalidDataException("Payload exceeds message limit.");

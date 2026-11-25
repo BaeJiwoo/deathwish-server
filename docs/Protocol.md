@@ -10,7 +10,7 @@ The server and MockClient share `DeathWish.Protocol` (.NET Standard 2.1). This r
 | 2 | 1 byte | Message type |
 | 3 | N bytes | Payload |
 
-Maximum payload length is 4096 bytes for messages other than WorldSnapshot. WorldSnapshot (7) permits up to 20,494 bytes for 1,024 players; this exception applies only to server-to-client snapshots. The inbound server length decoder remains limited to 4,099-byte frames. A complete frame is 3 + N bytes. Zero-length payloads are valid. Header and payload may arrive across multiple reads; one read may contain multiple frames. Each connection owns a PacketReader. Completed payload arrays belong to the recipient.
+Maximum payload length is 4096 bytes for ordinary messages. Server-to-client WorldSnapshot (7) permits up to 20,494 bytes, and AnimatedWorldSnapshot (17) permits up to 45,082 bytes, both for 1,024 players. The inbound server length decoder permits frames up to 4,099 bytes. A complete frame is 3 + N bytes. Header and payload may arrive across multiple reads, and one read may contain multiple frames. Each connection owns a PacketReader. Completed payload arrays belong to the recipient.
 
 ## Message types
 
@@ -18,7 +18,7 @@ Maximum payload length is 4096 bytes for messages other than WorldSnapshot. Worl
 | --- | --- | --- | --- |
 | 1 | EchoRequest | Client to server | Strict UTF-8 text, no BOM added |
 | 2 | EchoResponse | Server to client | Same text as request |
-| 3 | JoinRoomRequest | Client to server | RoomId: signed int32, big-endian |
+| 3 | JoinRoomRequest | Client to server | RoomId: signed int32, big-endian, followed by an optional animation flag |
 | 4 | JoinRoomResponse | Server to client | Requested RoomId: signed int32, big-endian; result: byte |
 | 5 | JoinAck | Server to client | RoomId, PlayerId, ServerTick, spawn X/Y/Z |
 | 6 | MoveInput | Client to server | Sequence: uint32; direction X/Z: float32 |
@@ -26,6 +26,7 @@ Maximum payload length is 4096 bytes for messages other than WorldSnapshot. Worl
 | 8 | Jump | Client to server | Empty payload. One Space press |
 | 9 | CameraRay | Client to server | Six big-endian float32 values. Camera offset XYZ in world axes from rendered feet (meters), then unit forward XYZ |
 | 10 | RaycastResult | Server to requesting client | UTF-8 text with hit kind, player ID when applicable, world point and distance in meters, or a miss |
+| 17 | AnimatedWorldSnapshot | Server to opted-in client | Full positional snapshot, rig ID, server time and ordered bone poses |
 
 The server processes one queued action per player per fixed tick in arrival order. A grounded jump applies an upward impulse targeting a 1.8 m rise under positive room gravity. The server casts up to 100 m from the authoritative foot position plus camera offset (maximum 8 m), excluding the requesting body.
 
@@ -42,10 +43,11 @@ Existing Echo frames are unchanged. Older endpoints do not support message IDs 3
 | Message | Payload offset | Size | Field |
 | --- | --- | --- | --- |
 | JoinRoomRequest | 0 | 4 bytes | RoomId |
+| JoinRoomRequest | 4 | 1 optional byte | Animation flag, exactly `1` when present |
 | JoinRoomResponse | 0 | 4 bytes | Requested RoomId, including on failure |
 | JoinRoomResponse | 4 | 1 byte | RoomJoinResult |
 
-Request payload length is exactly 4 (7-byte frame); response length is exactly 5 (8-byte frame).
+The request has four payload bytes for positional snapshots or five bytes to opt into animation. The response has five payload bytes in both cases.
 RoomId ranges from 1 to 2147483647. It names the requested room, not the session's current room.
 The request contains no SessionId; the server will identify the sender from its connection.
 
@@ -67,11 +69,12 @@ request. The client may retry after capacity becomes available; no retry interva
 
 Success acknowledges acceptance, not completion of a world update. The room reserves capacity
 and queues Join before responding. The world assigns PlayerId when a later tick processes Join.
-Repeated same-room requests do not reserve another slot or enqueue another Join. A disconnect
+Repeated same-room requests retain the original connection's snapshot format and do not reserve another slot or enqueue another Join. A disconnect
 before processing prevents admission or queues its cleanup; it does not require an acknowledgement.
 After player creation, Stage 5 sends JoinAck as specified below.
 
 Room 1 request: `00 04 03 00 00 00 01`.
+Room 1 animation request: `00 05 03 00 00 00 01 01`.
 Room 1 success: `00 05 04 00 00 00 01 00`.
 Room 99 not found: `00 05 04 00 00 00 63 02`.
 Room 1 world unavailable: `00 05 04 00 00 00 01 04`.
@@ -84,6 +87,29 @@ Malformed room messages close the connection, while valid admission
 failures return JoinRoomResponse. A positive nonexistent room ID is a valid request.
 Zero-length payloads are valid for Echo only. Requests and responses use TCP ordering;
 the client API allows one outstanding request at a time across both Echo and room admission.
+
+## Animated world snapshot
+
+An opted-in connection receives message 17 at the normal world snapshot cadence after JoinAck.
+Every animation frame carries its complete position roster. Ordinary connections receive message 7.
+Both formats carry the same tick and foot positions. The server coalesces an animation frame as a single snapshot, including its positions and poses.
+
+| Payload offset | Size | Field |
+| --- | --- | --- |
+| 0 | 14 + 20 × player count | Unchanged WorldSnapshot payload layout |
+| End of position payload | 4 bytes | Unsigned rig ID, big-endian, nonzero |
+| Previous offset + 4 | 8 bytes | Signed world simulation time in microseconds, big-endian, positive and increasing |
+| Previous offset + 8 | 24 × player count | One pose in the exact order of the positional roster |
+
+Each pose contains the root yaw around +Y as a signed 16-bit value, followed by 11 signed 16-bit local bone pitches around +X.
+All angles are in hundredths of a degree, range −18,000 to 18,000 inclusive, big-endian.
+Player IDs are supplied by the corresponding entries in the positional roster. The clip uses fixed local bone positions and unit scales from the shared rig definition.
+Rig ID 1 identifies the authored DeathWish rig and its joint order. A receiver can decode the fixed wire layout with an unfamiliar nonzero rig ID to report a mismatch without applying its angles.
+
+The world evaluates walk direction from committed planar travel after Bepu. Idle uses the standing pose and preserves the walk phase.
+Bone-linked diagnostic OBBs use the shared local box size and offset evaluated through the pose hierarchy.
+Unity uses the same rig, root, and pose timeline for display. Existing ray hits use the Bepu colliders.
+To read the position and pose atomically, client callers use the `Positions` property of a single `LatestAnimatedSnapshot` value.
 
 The server processes complete requests in arrival order, including mixed Echo and room requests.
 Admission failures keep the connection open and preserve existing membership. Responses contain

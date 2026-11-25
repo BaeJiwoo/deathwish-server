@@ -41,6 +41,9 @@ public sealed class RoomManager
     }
 
     public RoomJoinResult Join(Guid sessionId, int roomId)
+        => Join(sessionId, roomId, receivesAnimation: false);
+
+    internal RoomJoinResult Join(Guid sessionId, int roomId, bool receivesAnimation)
     {
         // Membership and room contents change together; disconnect cleanup uses the same lock.
         lock (_sync)
@@ -53,7 +56,7 @@ public sealed class RoomManager
             if (!room.World.Commands.IsAccepting) return RoomJoinResult.WorldUnavailable;
             if (_membership.TryGetValue(sessionId, out var membership))
                 return membership.Room == room ? RoomJoinResult.Success : RoomJoinResult.AlreadyInAnotherRoom;
-            if (!room.World.Commands.TryEnqueueJoin(session, out var admission))
+            if (!room.World.Commands.TryEnqueueJoin(session, out var admission, receivesAnimation))
                 return RoomJoinResult.WorldUnavailable;
 
             room.Add(sessionId);

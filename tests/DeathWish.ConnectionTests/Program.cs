@@ -42,6 +42,9 @@ PrimitiveTests.Run();
 BepuMovementTests.Run();
 PhysicsLabTests.Run();
 PhysicsLabTraversalTests.Run();
+AnimationRigTests.Run();
+AnimationProtocolTests.Run();
+AnimationWorldTests.Run();
 MovementInputTests.Run();
 await SnapshotTests.RunAsync();
 await MovementTests.RunAsync();
@@ -191,6 +194,7 @@ try
 {
     int port = ((IPEndPoint)listener.LocalEndpoint).Port;
     await GameServerTests.RunAsync();
+    await AnimationProtocolTests.RunTcpAsync();
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
     using var client = new ConnectionTestClient();
     Task<TcpClient> accept = listener.AcceptTcpClientAsync();

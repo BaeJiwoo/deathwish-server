@@ -40,8 +40,17 @@ public enum RoomJoinResult : byte
 public readonly struct JoinRoomRequest
 {
     public int RoomId { get; }
+    public bool ReceivesAnimation { get; }
 
-    public JoinRoomRequest(int roomId) => RoomId = roomId;
+    public JoinRoomRequest(int roomId) : this(roomId, false)
+    {
+    }
+
+    public JoinRoomRequest(int roomId, bool receivesAnimation)
+    {
+        RoomId = roomId;
+        ReceivesAnimation = receivesAnimation;
+    }
 }
 
 public readonly struct JoinRoomResponse

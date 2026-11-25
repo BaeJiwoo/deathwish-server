@@ -57,7 +57,12 @@ public static class SnapshotCodec
         byte[] frame = new byte[PacketCodec.HEADER_SIZE + length];
         BinaryPrimitives.WriteUInt16BigEndian(frame, (ushort)length);
         frame[2] = (byte)MessageType.WorldSnapshot;
-        Span<byte> payload = frame.AsSpan(PacketCodec.HEADER_SIZE);
+        WritePayload(frame.AsSpan(PacketCodec.HEADER_SIZE), snapshot);
+        return frame;
+    }
+
+    internal static void WritePayload(Span<byte> payload, WorldSnapshot snapshot)
+    {
         BinaryPrimitives.WriteInt32BigEndian(payload.Slice(ROOM_ID_OFFSET), snapshot.RoomId);
         BinaryPrimitives.WriteInt64BigEndian(payload.Slice(SERVER_TICK_OFFSET), snapshot.ServerTick);
         BinaryPrimitives.WriteUInt16BigEndian(payload.Slice(PLAYER_COUNT_OFFSET), (ushort)snapshot.Players.Count);
@@ -70,16 +75,17 @@ public static class SnapshotCodec
             WriteFloat(payload.Slice(offset + POSITION_Z_OFFSET), player.Z);
             offset += PLAYER_SIZE;
         }
-        return frame;
     }
 
-    public static WorldSnapshot Decode(byte[] payload)
+    public static WorldSnapshot Decode(byte[] payload) => DecodePayload(payload);
+
+    internal static WorldSnapshot DecodePayload(ReadOnlySpan<byte> payload)
     {
         if (payload.Length < HEADER_SIZE)
         {
             throw new InvalidDataException("Incomplete snapshot header.");
         }
-        int count = BinaryPrimitives.ReadUInt16BigEndian(payload.AsSpan(PLAYER_COUNT_OFFSET));
+        int count = ReadPlayerCount(payload);
         if (count > MAX_PLAYERS || payload.Length != HEADER_SIZE + count * PLAYER_SIZE)
         {
             throw new InvalidDataException("Invalid snapshot length.");
@@ -87,17 +93,20 @@ public static class SnapshotCodec
         var players = new SnapshotPlayer[count];
         for (int i = 0; i < count; i++)
         {
-            ReadOnlySpan<byte> entry = payload.AsSpan(HEADER_SIZE + i * PLAYER_SIZE);
+            ReadOnlySpan<byte> entry = payload.Slice(HEADER_SIZE + i * PLAYER_SIZE);
             players[i] = new SnapshotPlayer(BinaryPrimitives.ReadInt64BigEndian(entry.Slice(PLAYER_ID_OFFSET)),
                 ReadFloat(entry.Slice(POSITION_X_OFFSET)), ReadFloat(entry.Slice(POSITION_Y_OFFSET)), ReadFloat(entry.Slice(POSITION_Z_OFFSET)));
         }
-        var snapshot = new WorldSnapshot(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(ROOM_ID_OFFSET)),
-            BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(SERVER_TICK_OFFSET)), players);
+        var snapshot = new WorldSnapshot(BinaryPrimitives.ReadInt32BigEndian(payload.Slice(ROOM_ID_OFFSET)),
+            BinaryPrimitives.ReadInt64BigEndian(payload.Slice(SERVER_TICK_OFFSET)), players);
         Validate(snapshot);
         return snapshot;
     }
 
-    private static void Validate(WorldSnapshot snapshot)
+    internal static int ReadPlayerCount(ReadOnlySpan<byte> payload) =>
+        BinaryPrimitives.ReadUInt16BigEndian(payload.Slice(PLAYER_COUNT_OFFSET));
+
+    internal static void Validate(WorldSnapshot snapshot)
     {
         if (snapshot.RoomId <= 0 || snapshot.ServerTick <= 0 || snapshot.Players.Count > MAX_PLAYERS)
         {

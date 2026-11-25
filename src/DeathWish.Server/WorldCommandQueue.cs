@@ -22,7 +22,8 @@ internal sealed class WorldCommandQueue
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    internal bool TryEnqueueJoin(ClientSession session, [NotNullWhen(true)] out WorldAdmission? admission)
+    internal bool TryEnqueueJoin(ClientSession session, [NotNullWhen(true)] out WorldAdmission? admission,
+        bool receivesAnimation = false)
     {
         ArgumentNullException.ThrowIfNull(session);
         lock (_sync)
@@ -30,7 +31,7 @@ internal sealed class WorldCommandQueue
             admission = null;
             if (!_accepting || session.IsDisconnected || _admissions.Count >= _capacity) return false;
 
-            admission = new WorldAdmission(session, _timeProvider);
+            admission = new WorldAdmission(session, _timeProvider, receivesAnimation);
             _admissions.Add(admission);
             _commands.Enqueue(new WorldCommand(WorldCommandType.Join, admission));
             return true;

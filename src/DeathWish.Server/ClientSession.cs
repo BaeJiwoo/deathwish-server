@@ -39,7 +39,7 @@ public sealed class ClientSession
         Channel = channel;
     }
 
-    internal void ReplyToJoin(RoomManager rooms, int roomId)
+    internal void ReplyToJoin(RoomManager rooms, JoinRoomRequest request)
     {
         // Hold the output gate across admission so the world cannot enqueue JoinAck before this response.
         lock (_outputSync)
@@ -48,8 +48,8 @@ public sealed class ClientSession
             {
                 return;
             }
-            RoomJoinResult result = rooms.Join(SessionId, roomId);
-            Send(PacketCodec.EncodeJoinRoomResponse(new JoinRoomResponse(roomId, result)));
+            RoomJoinResult result = rooms.Join(SessionId, request.RoomId, request.ReceivesAnimation);
+            Send(PacketCodec.EncodeJoinRoomResponse(new JoinRoomResponse(request.RoomId, result)));
         }
     }
 

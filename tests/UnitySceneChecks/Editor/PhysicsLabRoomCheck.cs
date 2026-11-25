@@ -81,8 +81,11 @@ public static class PhysicsLabRoomCheck
             GameObject lab = client.transform.Find("PhysicsLab").gameObject;
             if (phase == 1)
             {
-                MeshFilter[] meshes = lab.GetComponentsInChildren<MeshFilter>();
+                MeshCollider[] meshes = lab.GetComponentsInChildren<MeshCollider>();
+                Transform paint = lab.transform.Find("CautionLines");
                 if (flat.activeSelf || !lab.activeSelf || meshes.Length != 7 ||
+                    paint == null || paint.GetComponent<MeshCollider>() != null ||
+                    paint.GetComponent<MeshRenderer>().sharedMaterial.GetFloat("_Caution") != 1f ||
                     meshes.Sum(m => m.sharedMesh.vertexCount) != 616 ||
                     meshes.Sum(m => m.sharedMesh.triangles.Length / 3) != 1202)
                 {

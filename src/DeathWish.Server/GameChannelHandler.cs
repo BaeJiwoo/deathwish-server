@@ -75,7 +75,7 @@ public sealed class GameChannelHandler : SimpleChannelInboundHandler<IByteBuffer
             case MessageType.JoinRoomRequest:
                 JoinRoomRequest request = PacketCodec.DecodeJoinRoomRequest(payload);
                 if (Session is null) throw new InvalidOperationException("Session is not active.");
-                Session.ReplyToJoin(_rooms, request.RoomId);
+                Session.ReplyToJoin(_rooms, request);
                 return;
             default:
                 throw new InvalidDataException("Server expects a request message.");

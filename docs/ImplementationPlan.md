@@ -187,6 +187,14 @@ Review each unit before committing it and starting the next unit.
 - Quantize positions in PacketCodec while retaining float simulation state.
 - Review: Boundary values and reconstruction error match the documented contract.
 
+## Server-authoritative animation review stage
+
+- Start from the server and Unity client `main` branches. Use the existing jump, camera ray and shoulder integration as the compatibility baseline for the current Unity scene.
+- Reproduce the authored in-place walk, stand, parent-first pose calculation and bone-aligned OBB checks from the [animation PoC verification](https://github.com/BaeJiwoo/PoC_ServerAuthoritative_Animation/blob/07384e54a585e700cdb0db5ecfd779ab75e842cc/README.md#검증) on an original 11-bone DeathWish rig.
+- Derive server yaw and walk phase from accepted planar movement after physics. Use the existing connection and coalesced position cadence with an opt-in, complete animation snapshot.
+- Apply delayed interpolation to authoritative root and bone data in Unity. Verify rig mismatch, gap reset, stable idle, wall contact, mixed legacy and animated connections, and the match between server bone/box coordinates and Unity transforms. This stage uses the existing Bepu raycast bodies and exercises the new OBBs as pose diagnostics.
+- Review status: awaiting user review on the animation branch.
+
 ## Stage 9 — Platform and load validation
 
 - [ ] Implementation and review complete.
