@@ -40,6 +40,8 @@ public sealed class GameWorld
     private double _snapshotElapsedSeconds;
     private double _simulationTimeSeconds;
 
+    private long SimulationTimeMicroseconds => checked((long)Math.Round(_simulationTimeSeconds * MICROSECONDS_PER_SECOND));
+
     public int RoomId { get; }
     public long CurrentTick => Interlocked.Read(ref _currentTick);
     public int PlayerCount => Volatile.Read(ref _publishedPlayers).Length;
@@ -145,13 +147,13 @@ public sealed class GameWorld
         }
 
         // Lifecycle commands run first; movement never adds commands to the bounded Join/Leave queue.
+        _simulationTimeSeconds += deltaTimeSeconds;
         changed |= StepPhysics(deltaTimeSeconds);
         if (changed)
         {
             Volatile.Write(ref _publishedPlayers, _players.Values.Select(player => player.State).ToArray());
         }
 
-        _simulationTimeSeconds += deltaTimeSeconds;
         _snapshotElapsedSeconds += deltaTimeSeconds;
         if (_snapshotElapsedSeconds >= SNAPSHOT_INTERVAL_SECONDS)
         {
@@ -222,21 +224,44 @@ public sealed class GameWorld
 
         byte[]? positionFrame = null;
         byte[]? animationFrame = null;
+        byte[]? gaitFrame = null;
+        byte[]? aimedGaitFrame = null;
+        long timeMicroseconds = SimulationTimeMicroseconds;
         foreach (var pair in activePlayers)
         {
             WorldAdmission admission = pair.Key;
-            // Both formats use the same replaceable output slot. An animated frame holds position and pose together.
+            // Each format shares the replaceable snapshot slot; all records come from this tick.
             if (!admission.IsDeparted && !admission.Session.IsDisconnected)
             {
-                byte[] frame = admission.ReceivesAnimation
-                    ? animationFrame ??= EncodeAnimationSnapshot(positions, activePlayers)
-                    : positionFrame ??= SnapshotCodec.Encode(positions);
+                byte[] frame = admission.Mode switch
+                {
+                    SnapshotMode.Gait => gaitFrame ??= EncodeGaitSnapshot(positions, activePlayers, timeMicroseconds, false),
+                    SnapshotMode.AimedGait or SnapshotMode.AimedGaitWithShots => aimedGaitFrame ??= EncodeGaitSnapshot(positions, activePlayers, timeMicroseconds, true),
+                    SnapshotMode.BonePoses => animationFrame ??= EncodeAnimationSnapshot(positions, activePlayers, timeMicroseconds),
+                    _ => positionFrame ??= SnapshotCodec.Encode(positions)
+                };
                 admission.Session.SendSnapshot(frame);
             }
         }
     }
 
-    private byte[] EncodeAnimationSnapshot(WorldSnapshot positions, KeyValuePair<WorldAdmission, WorldPlayer>[] activePlayers)
+    private static byte[] EncodeGaitSnapshot(WorldSnapshot positions, KeyValuePair<WorldAdmission, WorldPlayer>[] activePlayers,
+        long timeMicroseconds, bool includesAim)
+    {
+        var gait = new GaitPlayer[activePlayers.Length];
+        for (int index = 0; index < gait.Length; index++)
+        {
+            WorldPlayer player = activePlayers[index].Value;
+            double cycles = player.WalkPhaseSeconds / AnimationRig.WALK_DURATION_SECONDS;
+            uint phase = unchecked((uint)(ulong)(cycles * GaitPlayer.PHASE_UNITS_PER_CYCLE));
+            AimAngles aim = player.Aim ?? new AimAngles(player.YawCentidegrees, 0);
+            gait[index] = new GaitPlayer(player.State.PlayerId, player.YawCentidegrees, player.IsWalking, phase, aim);
+        }
+        return GaitSnapshotCodec.Encode(new GaitWorldSnapshot(positions, timeMicroseconds, gait), includesAim);
+    }
+
+    private static byte[] EncodeAnimationSnapshot(WorldSnapshot positions, KeyValuePair<WorldAdmission, WorldPlayer>[] activePlayers,
+        long timeMicroseconds)
     {
         var poses = new AnimatedPlayer[activePlayers.Length];
         for (int index = 0; index < activePlayers.Length; index++)
@@ -247,8 +272,7 @@ public sealed class GameWorld
             poses[index] = new AnimatedPlayer(player.State.PlayerId, player.YawCentidegrees, pitches);
         }
 
-        long serverTimeMicroseconds = checked((long)Math.Round(_simulationTimeSeconds * MICROSECONDS_PER_SECOND));
-        return AnimatedSnapshotCodec.Encode(new AnimatedWorldSnapshot(positions, serverTimeMicroseconds, poses));
+        return AnimatedSnapshotCodec.Encode(new AnimatedWorldSnapshot(positions, timeMicroseconds, poses));
     }
 
     private bool StepPhysics(float deltaTimeSeconds)
@@ -265,7 +289,8 @@ public sealed class GameWorld
                 continue;
             }
 
-            Vector3 velocity = admission.Movement.GetDirection() * MOVEMENT_SPEED_METERS_PER_SECOND;
+            Vector3 velocity = admission.Movement.GetDirection(out AimAngles? aim) * MOVEMENT_SPEED_METERS_PER_SECOND;
+            player.Aim = aim;
             player.HasMovementIntent = velocity != Vector3.Zero;
             _physics.SetHorizontalVelocity(player.Body, velocity.X, velocity.Z);
             if (player.IsJumping && _physics.GetMotion(player.Body).VerticalVelocityMetersPerSecond <= 0 &&
@@ -278,6 +303,7 @@ public sealed class GameWorld
                 if (ray.HasValue)
                 {
                     SendRaycastResult(admission.Session, player.Body, ray.Value);
+                    BroadcastShot(admission, player.State.PlayerId);
                 }
                 else if (!player.IsJumping && _gravityMetersPerSecondSquared > 0 && _physics.HasGroundSupport(player.Body))
                 {
@@ -318,7 +344,7 @@ public sealed class GameWorld
         }
 
         double walkSeconds = distanceMeters / (double)MOVEMENT_SPEED_METERS_PER_SECOND;
-        player.WalkPhaseSeconds = (player.WalkPhaseSeconds + walkSeconds) % AnimationRig.WALK_DURATION_SECONDS;
+        player.WalkPhaseSeconds += walkSeconds;
         player.YawCentidegrees = checked((short)MathF.Round(MathF.Atan2(travel.X, travel.Z) * CENTIDEGREES_PER_RADIAN));
     }
 
@@ -335,6 +361,21 @@ public sealed class GameWorld
             result = FormattableString.Invariant($"Raycast hit {name} at ({point.X:F2}, {point.Y:F2}, {point.Z:F2}), {distance:F2} m");
         }
         session.Send(ActionCodec.EncodeResult(result));
+    }
+
+    private void BroadcastShot(WorldAdmission shooter, long playerId)
+    {
+        byte[]? frame = null;
+        foreach (WorldAdmission observer in _players.Keys)
+        {
+            if (observer != shooter && observer.Mode == SnapshotMode.AimedGaitWithShots &&
+                !observer.IsDeparted && !observer.Session.IsDisconnected)
+            {
+                // The shooter already predicted the animation. Remote shots use the reliable FIFO, not the snapshot slot.
+                frame ??= ActionCodec.EncodeShotFired(new ShotFired(playerId, SimulationTimeMicroseconds));
+                observer.Session.Send(frame);
+            }
+        }
     }
 
     // Only the world loop performs terminal cleanup, after its last update or on failure.
@@ -355,6 +396,7 @@ public sealed class GameWorld
         internal bool IsWalking { get; set; }
         internal double WalkPhaseSeconds { get; set; }
         internal short YawCentidegrees { get; set; }
+        internal AimAngles? Aim { get; set; }
         internal BodyHandle Body { get; } = body;
         internal PlayerState State { get; set; } = state;
     }

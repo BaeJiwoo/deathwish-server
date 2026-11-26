@@ -12,8 +12,11 @@
     <Compile Include="../../integrations/Unity/RaycastFeedback.cs" />
     <Compile Include="../../integrations/Unity/ShoulderCameraSettings.cs" />
     <Compile Include="../../integrations/Unity/ServerAnimationView.cs" />
+    <Compile Include="../../integrations/Unity/ShooterAimView.cs" />
+    <Compile Include="../../integrations/Unity/ClipGaitAnimator.cs" />
     <ProjectReference Include="../../mockclient/DeathWish.MockClient.Core/DeathWish.MockClient.Core.csproj" />
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.CoreModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.AnimationModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.AnimationModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.dll</HintPath></Reference>
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.IMGUIModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(UnityEditorRoot)/Data/Managed/UnityEngine/UnityEngine.InputLegacyModule.dll</HintPath></Reference>

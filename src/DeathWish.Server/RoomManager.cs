@@ -41,9 +41,9 @@ public sealed class RoomManager
     }
 
     public RoomJoinResult Join(Guid sessionId, int roomId)
-        => Join(sessionId, roomId, receivesAnimation: false);
+        => Join(sessionId, roomId, SnapshotMode.Positions);
 
-    internal RoomJoinResult Join(Guid sessionId, int roomId, bool receivesAnimation)
+    internal RoomJoinResult Join(Guid sessionId, int roomId, SnapshotMode mode)
     {
         // Membership and room contents change together; disconnect cleanup uses the same lock.
         lock (_sync)
@@ -56,7 +56,7 @@ public sealed class RoomManager
             if (!room.World.Commands.IsAccepting) return RoomJoinResult.WorldUnavailable;
             if (_membership.TryGetValue(sessionId, out var membership))
                 return membership.Room == room ? RoomJoinResult.Success : RoomJoinResult.AlreadyInAnotherRoom;
-            if (!room.World.Commands.TryEnqueueJoin(session, out var admission, receivesAnimation))
+            if (!room.World.Commands.TryEnqueueJoin(session, out var admission, mode))
                 return RoomJoinResult.WorldUnavailable;
 
             room.Add(sessionId);
@@ -66,10 +66,10 @@ public sealed class RoomManager
     }
 
     /// <summary>Associates input with the connection's current admission. Does not mutate player state.</summary>
-    internal bool SubmitMovement(Guid sessionId, MoveInput input)
+    internal bool SubmitMovement(Guid sessionId, MoveInput input, AimAngles? aim = null)
     {
         input.Validate();
-        return GetActiveMailbox(sessionId)?.TrySetInput(input) ?? false;
+        return GetActiveMailbox(sessionId)?.TrySetInput(input, aim) ?? false;
     }
 
     internal MovementMailbox? GetActiveMailbox(Guid sessionId)

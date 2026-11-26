@@ -22,6 +22,7 @@ $manifestPath = Join-Path $project 'Packages/manifest.json'
 $manifest = [IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
 $existingUiVersion = $manifest.dependencies.'com.unity.ugui'
 $existingPhysicsVersion = $manifest.dependencies.'com.unity.modules.physics'
+$existingAnimationVersion = $manifest.dependencies.'com.unity.modules.animation'
 if ($null -ne $existingUiVersion -and $existingUiVersion -ne $package.version) {
     throw 'The project has a different uGUI version. Resolve the version before installing this scene.'
 }
@@ -49,12 +50,17 @@ foreach ($legacy in $legacyPaths) {
 if ($LASTEXITCODE -ne 0) { throw 'Client build failed. The manifest repair has completed; integration files were not changed.' }
 New-Item -ItemType Directory -Force -Path (Join-Path $destination 'Scenes'), (Join-Path $destination 'Resources') | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'maps/PhysicsLab/PhysicsLab.json') -Destination (Join-Path $destination 'Resources') -Force
-foreach ($file in @('SyncTestWorld.shader', 'SyncTestWorld.shader.meta', 'ShotFeedback.shader', 'ShotFeedback.shader.meta')) {
+foreach ($file in @('SyncTestWorld.shader', 'SyncTestWorld.shader.meta', 'ShotFeedback.shader', 'ShotFeedback.shader.meta',
+    'ShooterAimPose.json', 'ShooterAimPose.json.meta', 'CharacterMatte.mat', 'CharacterMatte.mat.meta',
+    'HeldRifle.prefab', 'HeldRifle.prefab.meta', 'HeldRifleArt.meta',
+    'ShooterWalk.anim', 'ShooterWalk.anim.meta', 'ShooterStand.anim', 'ShooterStand.anim.meta')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Resources/$file") -Destination (Join-Path $destination 'Resources') -Force
 }
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Resources/HeldRifleArt') -Destination (Join-Path $destination 'Resources') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'SyncTestClient.cs') -Destination $destination -Force
 foreach ($file in @('RaycastFeedback.cs', 'RaycastFeedback.cs.meta', 'ShoulderCameraSettings.cs', 'ShoulderCameraSettings.cs.meta',
-    'ServerAnimationView.cs', 'ServerAnimationView.cs.meta')) {
+    'ServerAnimationView.cs', 'ServerAnimationView.cs.meta', 'ShooterAimView.cs', 'ShooterAimView.cs.meta',
+    'ClipGaitAnimator.cs', 'ClipGaitAnimator.cs.meta')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $destination -Force
 }
 if (!(Test-Path -LiteralPath $scriptMeta)) {
@@ -99,9 +105,10 @@ foreach ($legacy in $legacyPaths) {
         }
     }
 }
-if ($null -eq $existingUiVersion -or $existingPhysicsVersion -ne '1.0.0') {
+if ($null -eq $existingUiVersion -or $existingPhysicsVersion -ne '1.0.0' -or $existingAnimationVersion -ne '1.0.0') {
     $manifest.dependencies | Add-Member -NotePropertyName $package.name -NotePropertyValue $package.version -Force
     $manifest.dependencies | Add-Member -NotePropertyName 'com.unity.modules.physics' -NotePropertyValue '1.0.0' -Force
+    $manifest.dependencies | Add-Member -NotePropertyName 'com.unity.modules.animation' -NotePropertyValue '1.0.0' -Force
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 100), (New-Object System.Text.UTF8Encoding($false)))
 }
 Write-Host 'Installed. Open Assets/DeathWishMovement/Scenes/SyncTestScene.unity. Canvas is already in the scene.'

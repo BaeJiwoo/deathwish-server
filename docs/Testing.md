@@ -242,14 +242,14 @@ powershell -ExecutionPolicy Bypass -File .\integrations\Unity\Install.ps1 -Unity
 - [ ] 서버 종료를 클라이언트가 감지하고, 서버 재실행·재접속도 성공한다.
 - [ ] 자동 테스트가 생략 없이 종료 코드 0으로 완료된다.
 
-## 11. 서버 권위 걷기 애니메이션
+## 11. Unity Animator 걷기 재생
 
-서버와 Unity 클라이언트의 `codex/server-authoritative-animation` 브랜치로 접속합니다. Unity의 **Use Server Animation**은 기본으로 활성화되며 일반 MockClient 접속도 같은 방에 참여할 수 있습니다. 서버가 실제 수평 이동으로 방향과 걷기 위상을 계산하므로 움직임이 멈추거나 벽에 막히면 캐릭터가 정지 자세로 표시됩니다.
+Unity의 **Use Server Animation**을 켜고 방에 입장합니다(기본값). 같은 방에 일반 MockClient로 접속해 이동하면 Unity가 원격 Bob의 걷기를 표시합니다. 서버는 실제 수평 이동에서 방향·걷기 여부·누적 주기를 계산합니다. 입력을 놓거나 벽에 막혀 이동이 멈추면 주기가 고정되고 Unity는 정지 자세로 전환합니다. 이동·점프·충돌·명중 판정은 서버에서 처리합니다.
 
-`python3 tools/animation/bake_walk.py --check`로 60 Hz 걷기 테이블의 재현성을 확인할 수 있습니다. 전체 ConnectionTests는 프레임 경계, 기존 접속과 애니메이션 접속 혼용, 지연 입력 만료, 세계 좌표 히트박스를 검사합니다.
+Unity는 이동 입력과 카메라의 좌우·상하 각도를 함께 전송합니다. 서버는 두 각도를 위치·보행 상태와 함께 20번 스냅숏에 담습니다. 로컬 캐릭터는 현재 카메라를 즉시 따르고 원격 캐릭터는 100ms 지연 타임라인에서 위치·보행 주기·조준 방향을 함께 보간합니다. Bob의 Animator는 이 주기에 맞춰 `ShooterWalk.anim`을 재생합니다. 원본 FBX의 골반·다리·발목·발가락 움직임을 사용하고, 한 주기의 수평 전진량은 클립에서 제거했습니다. **Show Position Gizmos**를 켜면 최신 서버 틱의 발 위치(자홍색 원)와 화면에 보간된 발 위치(청록색 마름모)를 비교할 수 있습니다.
 
-Unity 배치 검증은 별도 클라이언트 복사본의 `Assets/Editor`에 `ServerAnimationSceneCheck.cs`와 `ServerAnimationPoseReferenceCheck.cs`를 넣고 `-executeMethod DeathWish.Client.Editor.ServerAnimationSceneCheck.Run`으로 실행합니다. `DW_ANIMATION_TEST_PORT`에 방 1을 사용할 서버의 로컬 TCP 포트를 지정하면 실제 접속과 원격 관절 이동도 검증합니다. Bob FBX가 포함된 클라이언트에서 `DW_ANIMATION_REQUIRE_BOB=1`을 함께 지정하면 Bob의 스킨 본이 서버 포즈대로 움직이는지도 검증합니다.
-
-**Show Position Gizmos**가 켜져 있으면 자홍색 원은 최신 수신 서버 틱, 청록색 마름모는 클라이언트가 보간해 화면에 표시한 위치를 뜻합니다. 서버 포즈에 맞춰 움직이는 Bob과 두 표식을 같은 장면에서 볼 수 있습니다.
+- **원본 대조** — 서버 옆에 `deathwish-assets`를 놓고 서버 루트에서 `python3 tools/animation/bake_unity_locomotion.py --unity-editor "/path/to/Editor/Unity" --check`를 실행합니다. Unity 6000.3.11f1에서 ShooterPack의 `walk forward.fbx`와 Bob을 임포트해 생성한 클립을 체크인된 리소스와 비교합니다. 서버와 클라이언트 빌드는 생성된 파일을 사용합니다.
+- **서버와 전송** — ConnectionTests에서 기존·신규 스냅숏을 요청하는 클라이언트의 혼합 접속, 보행 상태·주기, 입력 만료와 피격 판정을 검사합니다. 기존 17번 스냅숏과 박스 리그의 60Hz 관절각 테이블은 Blender와 `python3 tools/animation/bake_walk.py --check`로 따로 검증합니다.
+- **Unity Play 모드** — 별도 클라이언트 복사본의 `Assets/Editor`에 서버의 `tests/UnitySceneChecks/Editor/{ServerAnimationSceneCheck,ServerAnimationPoseReferenceCheck,ShooterAimSceneCheck}.cs` 세 파일을 복사하고 `-executeMethod DeathWish.Client.Editor.ServerAnimationSceneCheck.Run`을 실행합니다. Bob이 포함되어 있으면 Animator의 정지·보행·정지 전환, 하체 본과 클립의 일치, 오른손 손잡이·왼손 지지점과 발사 시 총구 위치를 검사합니다. 실제 서버의 원격 Bob까지 검증하려면 `DW_ANIMATION_TEST_PORT`에 로컬 서버의 TCP 포트를 지정하고 `DW_ANIMATION_REQUIRE_BOB=1`을 함께 설정합니다. 검사가 같은 방에 두 클라이언트로 접속해 제자리 시선 전환과 이동 중 원격 조준 방향을 확인합니다. Bob의 스킨과 AR 모델에서 발 높이, 양손의 소켓 위치 오차와 조준 시 총구 각도를 측정합니다. 좌클릭 시 로컬 반동이 즉시 시작되고 같은 방에 접속한 관찰자에게도 사격이 보이는지 확인합니다.
 
 관련 문서 [프로토콜](Protocol.md), [구현 계획](ImplementationPlan.md), [Unity 연동 상세](../integrations/Unity/README.md), [개발 기록](devlog/README.md).

@@ -60,6 +60,13 @@ public sealed class GameChannelHandler : SimpleChannelInboundHandler<IByteBuffer
                     _rooms.GetActiveMailbox(Session.SessionId)?.EnqueueAction(ray);
                 }
                 return;
+            case MessageType.AimedMoveInput:
+                MoveInput aimedInput = PacketCodec.DecodeAimedMoveInput(payload, out AimAngles aim);
+                if (Session is not null)
+                {
+                    _rooms.SubmitMovement(Session.SessionId, aimedInput, aim);
+                }
+                return;
             case MessageType.MoveInput:
                 MoveInput input = PacketCodec.DecodeMoveInput(payload);
                 if (Session is not null)

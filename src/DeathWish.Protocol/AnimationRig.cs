@@ -38,7 +38,7 @@ public readonly struct AnimationBonePose
     }
 }
 
-/// <summary>Original DeathWish presentation rig and in-place walk in the shared coordinate system.</summary>
+/// <summary>DeathWish presentation rig and the ShooterPack forward walk sampled in the shared coordinate system.</summary>
 public static class AnimationRig
 {
     public const uint RIG_ID = 1;

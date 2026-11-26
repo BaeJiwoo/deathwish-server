@@ -29,8 +29,8 @@ internal static class AnimationWorldTests
         var legacy = new EmbeddedChannel(new GameChannelHandler(sessions, rooms));
         try
         {
-            JoinAck first = Join(animated, world, receivesAnimation: true);
-            JoinAck second = Join(legacy, world, receivesAnimation: false);
+            JoinAck first = Join(animated, world, SnapshotMode.BonePoses);
+            JoinAck second = Join(legacy, world, SnapshotMode.Positions);
             world.Tick(TICK_SECONDS);
             AnimatedWorldSnapshot initial = ReadAnimated(animated);
             VerifyLegacy(ReadPosition(legacy), initial.Positions);
@@ -106,9 +106,11 @@ internal static class AnimationWorldTests
         var rooms = new RoomManager(sessions, 1, 8, 8, clock);
         GameWorld world = rooms.GetWorlds()[0];
         var channel = new EmbeddedChannel(new GameChannelHandler(sessions, rooms));
+        var observer = new EmbeddedChannel(new GameChannelHandler(sessions, rooms));
         try
         {
-            Join(channel, world, receivesAnimation: true);
+            JoinAck actor = Join(channel, world, SnapshotMode.BonePoses);
+            Join(observer, world, SnapshotMode.Gait);
             SendMovement(channel, sequence: 0, x: 0f, z: 1f);
             Tick(world, 11);
             ReadLatestAnimated(channel);
@@ -117,14 +119,21 @@ internal static class AnimationWorldTests
             SendMovement(channel, sequence: 1, x: 1f, z: 0f);
             Tick(world, 180);
             AnimatedWorldSnapshot snapshot = ReadLatestAnimated(channel);
-            Require(snapshot.Positions.Players.Single().X is > 24.55f and < 24.75f,
+            Require(snapshot.Positions.Players.Single(p => p.PlayerId == actor.PlayerId).X is > 24.55f and < 24.75f,
                 "The actor reaches the PhysicsLab east wall");
-            Require(snapshot.Players.Single().YawCentidegrees == EAST_YAW_CENTIDEGREES &&
-                snapshot.Players.Single().BonePitchCentidegrees.All(pitch => pitch == 0),
+            AnimatedPlayer settled = snapshot.Players.Single(p => p.PlayerId == actor.PlayerId);
+            Require(settled.YawCentidegrees == EAST_YAW_CENTIDEGREES && settled.BonePitchCentidegrees.All(pitch => pitch == 0),
                 "Actual displacement stops the walk when persistent input pushes against a wall");
+            GaitPlayer held = ReadLatestGait(observer).Players.Single(p => p.PlayerId == actor.PlayerId);
+            Tick(world, TICKS_PER_SNAPSHOT);
+            GaitPlayer later = ReadLatestGait(observer).Players.Single(p => p.PlayerId == actor.PlayerId);
+            Require(!held.IsWalking && !later.IsWalking && held.CyclePhase > GaitPlayer.PHASE_UNITS_PER_CYCLE &&
+                held.CyclePhase == later.CyclePhase && held.YawCentidegrees == EAST_YAW_CENTIDEGREES,
+                "The gait clock counts complete cycles and holds phase and heading while blocked");
         }
         finally
         {
+            observer.FinishAndReleaseAll();
             channel.FinishAndReleaseAll();
             world.Shutdown();
         }
@@ -150,9 +159,9 @@ internal static class AnimationWorldTests
             "The server root basis rotates +Z forward to +X when walking east");
     }
 
-    private static JoinAck Join(EmbeddedChannel channel, GameWorld world, bool receivesAnimation)
+    private static JoinAck Join(EmbeddedChannel channel, GameWorld world, SnapshotMode mode)
     {
-        var request = new JoinRoomRequest(world.RoomId, receivesAnimation);
+        var request = new JoinRoomRequest(world.RoomId, mode);
         channel.WriteInbound(Unpooled.WrappedBuffer(PacketCodec.EncodeJoinRoomRequest(request)));
         byte[] response = ReadFrame(channel);
         Require(response[2] == (byte)MessageType.JoinRoomResponse &&
@@ -186,6 +195,17 @@ internal static class AnimationWorldTests
             latest = DecodeAnimated(CopyFrame(buffer));
         }
         return latest;
+    }
+
+    private static GaitWorldSnapshot ReadLatestGait(EmbeddedChannel channel)
+    {
+        byte[] frame = ReadFrame(channel);
+        while (channel.ReadOutbound<IByteBuffer>() is { } buffer)
+        {
+            frame = CopyFrame(buffer);
+        }
+        Require(frame[2] == (byte)MessageType.GaitWorldSnapshot, "A compact observer receives gait frames");
+        return GaitSnapshotCodec.Decode(frame[PacketCodec.HEADER_SIZE..]);
     }
 
     private static AnimatedWorldSnapshot DecodeAnimated(byte[] frame)

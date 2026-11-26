@@ -18,6 +18,7 @@ namespace DeathWish.Client
         private const float INPUT_INTERVAL_SECONDS = 1f / 30f;
         private const float LOOK_SENSITIVITY = 2f;
         private const float DEGREES_PER_TURN = 360f;
+        private const float CENTIDEGREES_PER_DEGREE = 100f;
         private const float POSITION_LABEL_HEIGHT_METERS = 0.70f;
         private const float DEFAULT_PITCH_DEGREES = 8f;
         private const float MIN_PITCH_DEGREES = -65f;
@@ -52,7 +53,7 @@ namespace DeathWish.Client
         [SerializeField] private bool _showRaycastGizmos = true;
         [SerializeField, Tooltip("Show the latest server position (magenta circle) and the interpolated client position (cyan diamond).")]
         private bool _showPositionGizmos = true;
-        [SerializeField, Tooltip("Subscribe to authoritative bone poses. Disable for older servers.")]
+        [SerializeField, Tooltip("Animate Bob from the walking state, cycle and camera aim. Disable for position-only servers.")]
         private bool _useServerAnimation = true;
 
         private readonly Dictionary<long, Vector3> _positions = new Dictionary<long, Vector3>();
@@ -75,6 +76,7 @@ namespace DeathWish.Client
         private Material _floorMaterial;
         private Material _wallMaterial;
         private Material _cautionMaterial;
+        private Material _torusMaterial;
         private Material _localMaterial;
         private Material _remoteMaterial;
         private Material _positionGizmoMaterial;
@@ -95,6 +97,14 @@ namespace DeathWish.Client
         private const int MAX_BUFFERED_ACTIONS = 16;
         private readonly Queue<ClientShot?> _actions = new Queue<ClientShot?>();
         private readonly Queue<ClientShot> _sentShots = new Queue<ClientShot>();
+        // At most the visible room capacity times four pending shots across a render-delay window.
+        private const int MAX_PENDING_VISUAL_SHOTS = 4096;
+        private const double MAX_SHOT_WAIT_SECONDS = 0.5;
+        private const double CATCH_UP_SHOT_INTERVAL_SECONDS = 0.08;
+        private readonly Queue<(ShotFired Shot, double ReceivedAtSeconds)> _pendingVisualShots =
+            new Queue<(ShotFired, double)>();
+        private readonly Dictionary<long, double> _shotStarts = new Dictionary<long, double>();
+        private readonly HashSet<long> _deferredShooters = new HashSet<long>();
         private RaycastFeedback _feedback;
         private bool _hasFocus;
         private bool _isConfigured;
@@ -123,19 +133,21 @@ namespace DeathWish.Client
             }
             _sceneCamera = Camera.main;
             Shader shader = Resources.Load<Shader>("SyncTestWorld");
+            var characterMatte = Resources.Load<Material>("CharacterMatte");
             Mesh floorMesh = Resources.GetBuiltinResource<Mesh>("Plane.fbx");
             _playerMesh = Resources.GetBuiltinResource<Mesh>("Capsule.fbx");
             _boxMesh = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
-            if (_sceneCamera != null && shader != null && shader.isSupported && floorMesh != null &&
+            if (_sceneCamera != null && shader != null && shader.isSupported && characterMatte != null && floorMesh != null &&
                 _playerMesh != null && _boxMesh != null)
             {
                 _viewCamera = _sceneCamera.transform;
-                CreateWorldView(shader, floorMesh);
+                CreateWorldView(shader, characterMatte, floorMesh);
+                EnsurePreviewLighting();
                 SelectMap(true);
             }
             else
             {
-                Debug.LogWarning("Third-person view needs a MainCamera, built-in meshes and the SyncTestWorld shader.");
+                Debug.LogWarning("Third-person view needs a MainCamera, built-in meshes, SyncTestWorld shader and CharacterMatte material.");
             }
 
             Application.runInBackground = true;
@@ -180,7 +192,7 @@ namespace DeathWish.Client
                     timeout.CancelAfter(TimeSpan.FromSeconds(TIMEOUT_SECONDS));
                     await client.ConnectAsync(host, port, timeout.Token);
                     JoinRoomResponse response = useServerAnimation
-                        ? await client.JoinAnimatedRoomAsync(room, timeout.Token)
+                        ? await client.JoinShootingRoomAsync(room, timeout.Token)
                         : await client.JoinRoomAsync(room, timeout.Token);
                     if (response.Result != RoomJoinResult.Success)
                     {
@@ -255,10 +267,7 @@ namespace DeathWish.Client
                     MIN_PITCH_DEGREES, MAX_PITCH_DEGREES);
             }
 
-            if (!ReadSnapshot(Time.unscaledTimeAsDouble))
-            {
-                return;
-            }
+            ReadSnapshot(Time.unscaledTimeAsDouble);
             while (_client.TryReadRaycastResult(out string result))
             {
                 _statusText.text = _status = result;
@@ -302,7 +311,17 @@ namespace DeathWish.Client
                     timeout.CancelAfter(TimeSpan.FromSeconds(TIMEOUT_SECONDS));
                     bool hasAction = _actions.Count > 0;
                     ClientShot? shot = hasAction ? _actions.Dequeue() : null;
-                    await client.SendMoveAsync(input, timeout.Token);
+                    if (_usesServerAnimation)
+                    {
+                        var aim = new AimAngles(
+                            (short)Mathf.RoundToInt(Mathf.DeltaAngle(0f, _yawDegrees) * CENTIDEGREES_PER_DEGREE),
+                            (short)Mathf.RoundToInt(_pitchDegrees * CENTIDEGREES_PER_DEGREE));
+                        await client.SendAimedMoveAsync(input, aim, timeout.Token);
+                    }
+                    else
+                    {
+                        await client.SendMoveAsync(input, timeout.Token);
+                    }
                     if (hasAction && generation == _generation)
                     {
                         if (shot.HasValue)
@@ -348,17 +367,16 @@ namespace DeathWish.Client
             SetPositions(snapshot);
         }
 
-        private bool ReadSnapshot(double nowSeconds)
+        private void ReadSnapshot(double nowSeconds)
         {
             if (_usesServerAnimation)
             {
-                AnimatedWorldSnapshot animated = _client.LatestAnimatedSnapshot;
-                if (animated == null || !IsNewSnapshot(animated.Positions))
+                GaitWorldSnapshot gait = _client.LatestGaitSnapshot;
+                if (gait != null && IsNewSnapshot(gait.Positions))
                 {
-                    return true;
+                    ApplyGaitSnapshot(gait, nowSeconds);
                 }
-
-                return ApplyAnimatedSnapshot(animated, nowSeconds);
+                return;
             }
 
             WorldSnapshot snapshot = _client.LatestSnapshot;
@@ -366,7 +384,6 @@ namespace DeathWish.Client
             {
                 ApplySnapshot(snapshot, nowSeconds);
             }
-            return true;
         }
 
         private bool IsNewSnapshot(WorldSnapshot snapshot)
@@ -374,18 +391,10 @@ namespace DeathWish.Client
             return !_hasSnapshot || snapshot.ServerTick > _lastTick;
         }
 
-        private bool ApplyAnimatedSnapshot(AnimatedWorldSnapshot snapshot, double nowSeconds)
+        private void ApplyGaitSnapshot(GaitWorldSnapshot snapshot, double nowSeconds)
         {
-            if (snapshot.RigId != AnimationRig.RIG_ID)
-            {
-                Disconnect();
-                _status = "The server animation rig is incompatible with this client.";
-                RefreshView();
-                return false;
-            }
             _animationTimeline.Add(snapshot, nowSeconds);
             SetPositions(snapshot.Positions);
-            return true;
         }
 
         private void SetPositions(WorldSnapshot snapshot)
@@ -409,13 +418,30 @@ namespace DeathWish.Client
             return _blendStarts.TryGetValue(id, out Vector3 start) ? Vector3.Lerp(start, target, fraction) : target;
         }
 
-        private void CreateWorldView(Shader shader, Mesh floorMesh)
+        private void EnsurePreviewLighting()
+        {
+            foreach (Light light in FindObjectsByType<Light>(FindObjectsSortMode.None))
+            {
+                if (light.isActiveAndEnabled)
+                {
+                    return;
+                }
+            }
+
+            var key = new GameObject("Character preview light");
+            key.transform.SetParent(transform, false);
+            key.transform.rotation = Quaternion.Euler(45f, -140f, 0f);
+            key.AddComponent<Light>().type = LightType.Directional;
+        }
+
+        private void CreateWorldView(Shader shader, Material characterMatte, Mesh floorMesh)
         {
             _floorMaterial = new Material(shader) { color = new Color32(227, 235, 238, 255) };
             _floorMaterial.SetFloat("_Grid", 1f);
             _floorMaterial.SetFloat("_FloorHalfSize", FLOOR_SIZE_METERS / 2);
-            _localMaterial = new Material(shader) { color = LocalAccent };
-            _remoteMaterial = new Material(shader) { color = RemoteAccent };
+            _torusMaterial = new Material(shader) { color = RemoteAccent };
+            _localMaterial = new Material(characterMatte) { color = LocalAccent };
+            _remoteMaterial = new Material(characterMatte) { color = RemoteAccent };
 
             _flatMap = new GameObject("Flat map");
             _flatMap.transform.SetParent(transform, false);
@@ -471,7 +497,7 @@ namespace DeathWish.Client
                     _physicsLab.transform.SetParent(transform, false);
                     foreach (LabObject part in data.Objects)
                     {
-                        Material material = part.Name == "Torus" ? _remoteMaterial : _floorMaterial;
+                        Material material = part.Name == "Torus" ? _torusMaterial : _floorMaterial;
                         CreateLabPart(part, material, true);
                     }
                     if (data.Caution != null)
@@ -526,13 +552,93 @@ namespace DeathWish.Client
             if (Input.GetMouseButtonDown(0) && _sentShots.Count + _actions.Count < MAX_BUFFERED_ACTIONS &&
                 _viewCamera != null && _markers.TryGetValue(_playerId, out Transform marker))
             {
-                Vector3 offset = _viewCamera.position - marker.position;
-                Vector3 forward = _sceneCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f)).direction;
-                var request = new CameraRay(new System.Numerics.Vector3(offset.x, offset.y, offset.z),
-                    new System.Numerics.Vector3(forward.x, forward.y, forward.z));
-                _actions.Enqueue(new ClientShot(request, new Ray(_viewCamera.position, forward),
-                    marker.TransformPoint(TrailOriginLocalMeters)));
+                QueueLocalShot(marker, Time.unscaledTimeAsDouble);
             }
+        }
+
+        private void QueueLocalShot(Transform marker, double nowSeconds)
+        {
+            // The ray and tracer refer to the visible muzzle at the instant of the click.
+            _actions.Enqueue(CaptureShot(marker));
+            if (_usesServerAnimation)
+            {
+                _shotStarts[_playerId] = nowSeconds;
+                if (_serverCharacters.TryGetValue(_playerId, out ServerCharacterView character))
+                {
+                    character.BeginLocalShot();
+                }
+            }
+        }
+
+        private void QueueRemoteShot(ShotFired shot, double receivedAtSeconds)
+        {
+            _pendingVisualShots.Enqueue((shot, receivedAtSeconds));
+        }
+
+        private void ReadShotEvents(double nowSeconds, bool hasAnimation, AnimationRenderSample sample)
+        {
+            if (!_usesServerAnimation)
+            {
+                return;
+            }
+            while (_client != null && _pendingVisualShots.Count < MAX_PENDING_VISUAL_SHOTS &&
+                _client.TryReadShotFired(out ShotFired shot))
+            {
+                QueueRemoteShot(shot, nowSeconds);
+            }
+
+            _deferredShooters.Clear();
+            int count = _pendingVisualShots.Count;
+            for (int index = 0; index < count; index++)
+            {
+                var pending = _pendingVisualShots.Dequeue();
+                if (nowSeconds - pending.ReceivedAtSeconds > MAX_SHOT_WAIT_SECONDS)
+                {
+                    continue;
+                }
+
+                long id = pending.Shot.PlayerId;
+                // An event can precede the first visible bracket for this actor. Retain it briefly.
+                if (_deferredShooters.Contains(id) || !hasAnimation || !_positions.ContainsKey(id) ||
+                    !sample.TryGetPlayer(id, out _, out _))
+                {
+                    _pendingVisualShots.Enqueue(pending);
+                    continue;
+                }
+
+                double scheduledSeconds = _animationTimeline.GetShotStartSeconds(pending.Shot.ServerTimeMicroseconds);
+                if (_shotStarts.TryGetValue(id, out double previousStart) && scheduledSeconds <= previousStart)
+                {
+                    // Network bursts may contain several live shots whose nominal times have
+                    // already passed. Show their retriggers in order without blocking other actors.
+                    scheduledSeconds = previousStart + CATCH_UP_SHOT_INTERVAL_SECONDS;
+                }
+                if (nowSeconds < scheduledSeconds)
+                {
+                    _pendingVisualShots.Enqueue(pending);
+                }
+                else
+                {
+                    // A late live notification starts a fresh kick on this frame.
+                    _shotStarts[id] = nowSeconds;
+                }
+                _deferredShooters.Add(id);
+            }
+        }
+
+        private ClientShot CaptureShot(Transform marker)
+        {
+            Vector3 offset = _viewCamera.position - marker.position;
+            Vector3 forward = _sceneCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f)).direction;
+            var request = new CameraRay(new System.Numerics.Vector3(offset.x, offset.y, offset.z),
+                new System.Numerics.Vector3(forward.x, forward.y, forward.z));
+            Vector3 trailStart;
+            if (!_serverCharacters.TryGetValue(_playerId, out ServerCharacterView character) ||
+                !character.TryGetMuzzlePosition(out trailStart))
+            {
+                trailStart = marker.TransformPoint(TrailOriginLocalMeters);
+            }
+            return new ClientShot(request, new Ray(_viewCamera.position, forward), trailStart);
         }
 
         private void RenderWorld(double nowSeconds)
@@ -557,10 +663,12 @@ namespace DeathWish.Client
                 _positionGizmos.Remove(playerId);
                 _blendStarts.Remove(playerId);
                 _serverCharacters.Remove(playerId);
+                _shotStarts.Remove(playerId);
             }
 
             float fraction = BlendFraction(nowSeconds);
             bool hasAnimation = _animationTimeline.TrySample(nowSeconds, out AnimationRenderSample animation);
+            ReadShotEvents(nowSeconds, hasAnimation, animation);
             foreach (var player in _positions)
             {
                 bool isLocalPlayer = player.Key == _playerId;
@@ -582,7 +690,7 @@ namespace DeathWish.Client
                 }
                 if (_usesServerAnimation)
                 {
-                    RenderAnimatedPlayer(marker, player.Key, player.Value, hasAnimation, animation, isLocalPlayer);
+                    RenderAnimatedPlayer(marker, player.Key, player.Value, hasAnimation, animation, isLocalPlayer, nowSeconds);
                 }
                 else
                 {
@@ -615,7 +723,7 @@ namespace DeathWish.Client
         }
 
         private void RenderAnimatedPlayer(Transform marker, long id, Vector3 position, bool hasAnimation,
-            AnimationRenderSample sample, bool isLocalPlayer)
+            AnimationRenderSample sample, bool isLocalPlayer, double nowSeconds)
         {
             if (!hasAnimation || !sample.TryGetPlayer(id, out AnimationFramePlayer previous, out AnimationFramePlayer next))
             {
@@ -627,6 +735,10 @@ namespace DeathWish.Client
                 return;
             }
 
+            if (!marker.gameObject.activeSelf)
+            {
+                marker.gameObject.SetActive(true);
+            }
             if (!_serverCharacters.TryGetValue(id, out ServerCharacterView character))
             {
                 character = new ServerCharacterView(marker, _boxMesh, isLocalPlayer ? _localMaterial : _remoteMaterial);
@@ -634,11 +746,21 @@ namespace DeathWish.Client
             }
 
             marker.position = Vector3.Lerp(previous.Position, next.Position, sample.Fraction);
-            character.Apply(previous.Pose, next.Pose, sample.Fraction);
-            if (!marker.gameObject.activeSelf)
+            float aimYawDegrees = _yawDegrees;
+            float aimPitchDegrees = _pitchDegrees;
+            if (!isLocalPlayer)
             {
-                marker.gameObject.SetActive(true);
+                AimAngles from = previous.Gait.Aim;
+                AimAngles to = next.Gait.Aim;
+                aimYawDegrees = Mathf.LerpAngle(from.YawCentidegrees / CENTIDEGREES_PER_DEGREE,
+                    to.YawCentidegrees / CENTIDEGREES_PER_DEGREE, sample.Fraction);
+                aimPitchDegrees = Mathf.Lerp(from.PitchCentidegrees, to.PitchCentidegrees, sample.Fraction) /
+                    CENTIDEGREES_PER_DEGREE;
             }
+            double shotAgeSeconds = _shotStarts.TryGetValue(id, out double startSeconds)
+                ? nowSeconds - startSeconds : double.PositiveInfinity;
+            character.Apply(previous.Gait, next.Gait, sample.Fraction, sample.ServerTimeSeconds, aimYawDegrees,
+                aimPitchDegrees, shotAgeSeconds);
         }
 
         private void UpdatePositionGizmos(long id, Transform marker, Vector3 serverPosition)
@@ -829,6 +951,7 @@ namespace DeathWish.Client
             Destroy(_floorMaterial);
             Destroy(_wallMaterial);
             Destroy(_cautionMaterial);
+            Destroy(_torusMaterial);
             Destroy(_localMaterial);
             Destroy(_remoteMaterial);
             Destroy(_positionGizmoMaterial);
@@ -860,6 +983,8 @@ namespace DeathWish.Client
             _animationTimeline.Clear();
             _latestRayResult = string.Empty;
             _sentShots.Clear();
+            _pendingVisualShots.Clear();
+            _shotStarts.Clear();
             _feedback?.Clear();
             foreach (Transform marker in _markers.Values)
             {

@@ -24,10 +24,56 @@ public readonly struct CameraRay
     }
 }
 
+/// <summary>A single remote shot at world simulation time, on the same clock as an aimed gait snapshot.</summary>
+public readonly struct ShotFired
+{
+    public long PlayerId { get; }
+    public long ServerTimeMicroseconds { get; }
+
+    public ShotFired(long playerId, long serverTimeMicroseconds)
+    {
+        PlayerId = playerId;
+        ServerTimeMicroseconds = serverTimeMicroseconds;
+    }
+
+    internal void Validate()
+    {
+        if (PlayerId <= 0 || ServerTimeMicroseconds <= 0)
+        {
+            throw new InvalidDataException("Invalid shot player ID or simulation time.");
+        }
+    }
+}
+
 public static class ActionCodec
 {
     private const int VECTOR_SIZE = 3 * sizeof(float);
     private const int RAY_SIZE = 2 * VECTOR_SIZE;
+
+    private const int SHOT_EVENT_SIZE = 2 * sizeof(long);
+
+    public static byte[] EncodeShotFired(ShotFired shot)
+    {
+        shot.Validate();
+        var frame = new byte[PacketCodec.HEADER_SIZE + SHOT_EVENT_SIZE];
+        frame[1] = SHOT_EVENT_SIZE;
+        frame[2] = (byte)MessageType.ShotFired;
+        BinaryPrimitives.WriteInt64BigEndian(frame.AsSpan(PacketCodec.HEADER_SIZE), shot.PlayerId);
+        BinaryPrimitives.WriteInt64BigEndian(frame.AsSpan(PacketCodec.HEADER_SIZE + sizeof(long)), shot.ServerTimeMicroseconds);
+        return frame;
+    }
+
+    public static ShotFired DecodeShotFired(byte[] payload)
+    {
+        if (payload.Length != SHOT_EVENT_SIZE)
+        {
+            throw new InvalidDataException("Invalid shot event length.");
+        }
+        var shot = new ShotFired(BinaryPrimitives.ReadInt64BigEndian(payload),
+            BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(sizeof(long))));
+        shot.Validate();
+        return shot;
+    }
 
     public static byte[] EncodeJump() => new byte[] { 0, 0, (byte)MessageType.Jump };
 

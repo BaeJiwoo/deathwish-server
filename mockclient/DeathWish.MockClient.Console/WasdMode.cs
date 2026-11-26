@@ -5,6 +5,7 @@ using DeathWish.Protocol;
 internal static class WasdMode
 {
     private const int INPUT_INTERVAL_MS = 33;
+    private const int TERMINAL_KEY_TIMEOUT_MS = 250;
     private const int WRITE_TIMEOUT_SECONDS = 5;
     private const float YAW_DEGREES_PER_SECOND = 90;
     private const float DEGREES_PER_TURN = 360;
@@ -32,10 +33,15 @@ internal static class WasdMode
     public static async Task<uint> RunAsync(ConnectionTestClient client, long playerId,
         uint sequence, CancellationToken cancellationToken)
     {
-        if (!OperatingSystem.IsWindows() || Console.IsInputRedirected || Console.IsOutputRedirected)
+        if (Console.IsInputRedirected || Console.IsOutputRedirected)
         {
-            Console.WriteLine("/wasd requires an interactive Windows console. Use /move on other platforms.");
+            Console.WriteLine("/wasd requires an interactive console. Use /move here.");
             return sequence;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return await RunTerminalAsync(client, sequence, cancellationToken);
         }
 
         IntPtr window = GetConsoleWindow();
@@ -105,4 +111,65 @@ internal static class WasdMode
 
     private static bool IsDown(int key) => (GetAsyncKeyState(key) & 0x8000) != 0;
     private static int Axis(int positive, int negative) => (IsDown(positive) ? 1 : 0) - (IsDown(negative) ? 1 : 0);
+
+    private static async Task<uint> RunTerminalAsync(ConnectionTestClient client, uint sequence, CancellationToken cancellationToken)
+    {
+        Console.WriteLine("Terminal mode: W/A/S/D moves while key events repeat, Space stops, Esc returns. Movement stops shortly after the last key event.");
+        float strafe = 0;
+        float forward = 0;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long lastMovementKeyMs = -TERMINAL_KEY_TIMEOUT_MS;
+        bool isFinished = false;
+        try
+        {
+            while (!client.Disconnected.IsCompleted && !isFinished)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                while (Console.KeyAvailable)
+                {
+                    var key = Console.ReadKey(true).Key;
+                    if (key == ConsoleKey.Escape)
+                    {
+                        isFinished = true;
+                        break;
+                    }
+
+                    switch (key)
+                    {
+                        case ConsoleKey.W: strafe = 0; forward = 1; lastMovementKeyMs = clock.ElapsedMilliseconds; break;
+                        case ConsoleKey.A: strafe = -1; forward = 0; lastMovementKeyMs = clock.ElapsedMilliseconds; break;
+                        case ConsoleKey.S: strafe = 0; forward = -1; lastMovementKeyMs = clock.ElapsedMilliseconds; break;
+                        case ConsoleKey.D: strafe = 1; forward = 0; lastMovementKeyMs = clock.ElapsedMilliseconds; break;
+                        case ConsoleKey.Spacebar: strafe = 0; forward = 0; break;
+                    }
+                }
+
+                if (isFinished)
+                {
+                    break;
+                }
+
+                // Terminals report key presses and repeats, but generally not key releases or focus loss.
+                if (clock.ElapsedMilliseconds - lastMovementKeyMs >= TERMINAL_KEY_TIMEOUT_MS)
+                {
+                    strafe = 0;
+                    forward = 0;
+                }
+
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(WRITE_TIMEOUT_SECONDS));
+                await client.SendMoveAsync(MovementInput.FromLocalAxes(sequence++, strafe, forward, 0), timeout.Token);
+                await Task.Delay(INPUT_INTERVAL_MS, cancellationToken);
+            }
+        }
+        finally
+        {
+            if (!client.Disconnected.IsCompleted)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(WRITE_TIMEOUT_SECONDS));
+                await client.SendMoveAsync(new MoveInput(sequence++, 0, 0), timeout.Token);
+            }
+        }
+        return sequence;
+    }
 }

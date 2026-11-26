@@ -17,14 +17,17 @@ public enum MessageType : byte
     Jump = 8,
     CameraRay = 9,
     RaycastResult = 10,
-    AnimatedWorldSnapshot = 17
+    AnimatedWorldSnapshot = 17,
+    GaitWorldSnapshot = 18,
+    AimedMoveInput = 19,
+    AimedGaitWorldSnapshot = 20,
+    ShotFired = 21
 }
 
 public static class PacketCodec
 {
     private const int JOIN_ACK_BASE_SIZE = 32;
     private const int JOIN_ROOM_ID_SIZE = sizeof(int);
-    private const byte ANIMATED_JOIN_FLAG = 1;
     private const byte PHYSICS_LAB_MAP_ID = 1;
     private const int MOVE_INPUT_PAYLOAD_SIZE = 12;
     private const int MOVE_SEQUENCE_OFFSET = 0;
@@ -52,22 +55,43 @@ public static class PacketCodec
 
     public static string DecodeEcho(byte[] payload) => Encoding.GetString(payload);
 
-    public static byte[] EncodeMoveInput(MoveInput input)
+    public static byte[] EncodeMoveInput(MoveInput input) => EncodeMovement(input, null);
+
+    public static byte[] EncodeAimedMoveInput(MoveInput input, AimAngles aim) => EncodeMovement(input, aim);
+
+    private static byte[] EncodeMovement(MoveInput input, AimAngles? aim)
     {
         input.Validate();
-        byte[] frame = new byte[HEADER_SIZE + MOVE_INPUT_PAYLOAD_SIZE];
-        frame[1] = MOVE_INPUT_PAYLOAD_SIZE;
-        frame[2] = (byte)MessageType.MoveInput;
+        int payloadSize = MOVE_INPUT_PAYLOAD_SIZE + (aim.HasValue ? AimAngles.WIRE_SIZE : 0);
+        var frame = new byte[HEADER_SIZE + payloadSize];
+        frame[1] = (byte)payloadSize;
+        frame[2] = (byte)(aim.HasValue ? MessageType.AimedMoveInput : MessageType.MoveInput);
         Span<byte> payload = frame.AsSpan(HEADER_SIZE);
         BinaryPrimitives.WriteUInt32BigEndian(payload.Slice(MOVE_SEQUENCE_OFFSET), input.Sequence);
         BinaryPrimitives.WriteInt32BigEndian(payload.Slice(MOVE_X_OFFSET), BitConverter.SingleToInt32Bits(input.X));
         BinaryPrimitives.WriteInt32BigEndian(payload.Slice(MOVE_Z_OFFSET), BitConverter.SingleToInt32Bits(input.Z));
+        if (aim.HasValue)
+        {
+            aim.Value.Write(payload.Slice(MOVE_INPUT_PAYLOAD_SIZE));
+        }
         return frame;
     }
 
     public static MoveInput DecodeMoveInput(byte[] payload)
     {
         ValidatePayloadLength(payload, MOVE_INPUT_PAYLOAD_SIZE);
+        return ReadMovement(payload);
+    }
+
+    public static MoveInput DecodeAimedMoveInput(byte[] payload, out AimAngles aim)
+    {
+        ValidatePayloadLength(payload, MOVE_INPUT_PAYLOAD_SIZE + AimAngles.WIRE_SIZE);
+        aim = AimAngles.Read(payload.AsSpan(MOVE_INPUT_PAYLOAD_SIZE));
+        return ReadMovement(payload);
+    }
+
+    private static MoveInput ReadMovement(byte[] payload)
+    {
         var input = new MoveInput(BinaryPrimitives.ReadUInt32BigEndian(payload.AsSpan(MOVE_SEQUENCE_OFFSET)),
             BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(MOVE_X_OFFSET))),
             BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(MOVE_Z_OFFSET))));
@@ -78,14 +102,18 @@ public static class PacketCodec
     public static byte[] EncodeJoinRoomRequest(JoinRoomRequest request)
     {
         ValidateRoomId(request.RoomId);
-        int length = request.ReceivesAnimation ? JOIN_ROOM_ID_SIZE + 1 : JOIN_ROOM_ID_SIZE;
+        if (request.Mode > SnapshotMode.AimedGaitWithShots)
+        {
+            throw new InvalidDataException("Unknown snapshot mode.");
+        }
+        int length = request.Mode == SnapshotMode.Positions ? JOIN_ROOM_ID_SIZE : JOIN_ROOM_ID_SIZE + 1;
         byte[] frame = new byte[HEADER_SIZE + length];
         frame[1] = (byte)length;
         frame[2] = (byte)MessageType.JoinRoomRequest;
         BinaryPrimitives.WriteInt32BigEndian(frame.AsSpan(HEADER_SIZE, JOIN_ROOM_ID_SIZE), request.RoomId);
-        if (request.ReceivesAnimation)
+        if (request.Mode != SnapshotMode.Positions)
         {
-            frame[HEADER_SIZE + JOIN_ROOM_ID_SIZE] = ANIMATED_JOIN_FLAG;
+            frame[HEADER_SIZE + JOIN_ROOM_ID_SIZE] = (byte)request.Mode;
         }
         return frame;
     }
@@ -96,11 +124,22 @@ public static class PacketCodec
         {
             throw new ArgumentNullException(nameof(payload));
         }
-        bool receivesAnimation = payload.Length == JOIN_ROOM_ID_SIZE + 1 && payload[JOIN_ROOM_ID_SIZE] == ANIMATED_JOIN_FLAG;
-        ValidatePayloadLength(payload, receivesAnimation ? JOIN_ROOM_ID_SIZE + 1 : JOIN_ROOM_ID_SIZE);
+        var mode = SnapshotMode.Positions;
+        if (payload.Length == JOIN_ROOM_ID_SIZE + 1)
+        {
+            mode = (SnapshotMode)payload[JOIN_ROOM_ID_SIZE];
+            if (mode < SnapshotMode.BonePoses || mode > SnapshotMode.AimedGaitWithShots)
+            {
+                throw new InvalidDataException("Unknown snapshot mode.");
+            }
+        }
+        else
+        {
+            ValidatePayloadLength(payload, JOIN_ROOM_ID_SIZE);
+        }
         int roomId = BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan());
         ValidateRoomId(roomId);
-        return new JoinRoomRequest(roomId, receivesAnimation);
+        return new JoinRoomRequest(roomId, mode);
     }
 
     public static byte[] EncodeJoinRoomResponse(JoinRoomResponse response)
@@ -198,7 +237,9 @@ public static class PacketCodec
         if (type != MessageType.EchoRequest && type != MessageType.EchoResponse &&
             type != MessageType.JoinRoomRequest && type != MessageType.JoinRoomResponse && type != MessageType.JoinAck &&
             type != MessageType.MoveInput && type != MessageType.WorldSnapshot && type != MessageType.Jump &&
-            type != MessageType.CameraRay && type != MessageType.RaycastResult && type != MessageType.AnimatedWorldSnapshot)
+            type != MessageType.CameraRay && type != MessageType.RaycastResult &&
+            type != MessageType.AnimatedWorldSnapshot && type != MessageType.GaitWorldSnapshot &&
+            type != MessageType.AimedMoveInput && type != MessageType.AimedGaitWorldSnapshot && type != MessageType.ShotFired)
             throw new InvalidDataException("Unknown message type.");
     }
 }
@@ -234,6 +275,8 @@ public sealed class PacketReader
                 {
                     MessageType.WorldSnapshot => SnapshotCodec.MAX_PAYLOAD_LENGTH,
                     MessageType.AnimatedWorldSnapshot => AnimatedSnapshotCodec.MAX_PAYLOAD_LENGTH,
+                    MessageType.GaitWorldSnapshot => GaitSnapshotCodec.MAX_PAYLOAD_LENGTH,
+                    MessageType.AimedGaitWorldSnapshot => GaitSnapshotCodec.MAX_AIMED_PAYLOAD_LENGTH,
                     _ => PacketCodec.MAX_PAYLOAD_LENGTH
                 };
                 if (length > maximum)

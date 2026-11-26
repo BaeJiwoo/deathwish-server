@@ -37,10 +37,20 @@ public enum RoomJoinResult : byte
     WorldUnavailable = 4
 }
 
+public enum SnapshotMode : byte
+{
+    Positions = 0,
+    BonePoses = 1,
+    Gait = 2,
+    AimedGait = 3,
+    AimedGaitWithShots = 4
+}
+
 public readonly struct JoinRoomRequest
 {
     public int RoomId { get; }
-    public bool ReceivesAnimation { get; }
+    public SnapshotMode Mode { get; }
+    public bool ReceivesAnimation => Mode == SnapshotMode.BonePoses;
 
     public JoinRoomRequest(int roomId) : this(roomId, false)
     {
@@ -49,7 +59,13 @@ public readonly struct JoinRoomRequest
     public JoinRoomRequest(int roomId, bool receivesAnimation)
     {
         RoomId = roomId;
-        ReceivesAnimation = receivesAnimation;
+        Mode = receivesAnimation ? SnapshotMode.BonePoses : SnapshotMode.Positions;
+    }
+
+    public JoinRoomRequest(int roomId, SnapshotMode mode)
+    {
+        RoomId = roomId;
+        Mode = mode;
     }
 }
 

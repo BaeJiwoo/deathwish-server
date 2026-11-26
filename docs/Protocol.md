@@ -10,7 +10,7 @@ The server and MockClient share `DeathWish.Protocol` (.NET Standard 2.1). This r
 | 2 | 1 byte | Message type |
 | 3 | N bytes | Payload |
 
-Maximum payload length is 4096 bytes for ordinary messages. Server-to-client WorldSnapshot (7) permits up to 20,494 bytes, and AnimatedWorldSnapshot (17) permits up to 45,082 bytes, both for 1,024 players. The inbound server length decoder permits frames up to 4,099 bytes. A complete frame is 3 + N bytes. Header and payload may arrive across multiple reads, and one read may contain multiple frames. Each connection owns a PacketReader. Completed payload arrays belong to the recipient.
+Maximum payload length is 4096 bytes for ordinary messages. Server-to-client WorldSnapshot (7) permits up to 20,494 bytes, AnimatedWorldSnapshot (17) permits up to 45,082 bytes, GaitWorldSnapshot (18) permits up to 27,670 bytes, and AimedGaitWorldSnapshot (20) permits up to 31,766 bytes. Each supports up to 1,024 players. The inbound server length decoder permits frames up to 4,099 bytes. A complete frame is 3 + N bytes. Header and payload may arrive across multiple reads, and one read may contain multiple frames. Each connection owns a PacketReader. Completed payload arrays belong to the recipient.
 
 ## Message types
 
@@ -26,7 +26,11 @@ Maximum payload length is 4096 bytes for ordinary messages. Server-to-client Wor
 | 8 | Jump | Client to server | Empty payload. One Space press |
 | 9 | CameraRay | Client to server | Six big-endian float32 values. Camera offset XYZ in world axes from rendered feet (meters), then unit forward XYZ |
 | 10 | RaycastResult | Server to requesting client | UTF-8 text with hit kind, player ID when applicable, world point and distance in meters, or a miss |
-| 17 | AnimatedWorldSnapshot | Server to opted-in client | Full positional snapshot, rig ID, server time and ordered bone poses |
+| 17 | AnimatedWorldSnapshot | Server to mode 1 client | Full positional snapshot, rig ID, server time and ordered bone poses |
+| 18 | GaitWorldSnapshot | Server to mode 2 client | Full positional snapshot, server time and ordered gait states |
+| 19 | AimedMoveInput | Client to server | MoveInput payload followed by signed int16 camera yaw and pitch |
+| 20 | AimedGaitWorldSnapshot | Server to mode 3 or 4 client | Positions, server time and ordered gait records with camera yaw and pitch |
+| 21 | ShotFired | Server to other mode 4 clients in the room | Shooter PlayerId and shot simulation time in microseconds, both positive signed int64 big-endian |
 
 The server processes one queued action per player per fixed tick in arrival order. A grounded jump applies an upward impulse targeting a 1.8 m rise under positive room gravity. The server casts up to 100 m from the authoritative foot position plus camera offset (maximum 8 m), excluding the requesting body.
 
@@ -43,7 +47,7 @@ Existing Echo frames are unchanged. Older endpoints do not support message IDs 3
 | Message | Payload offset | Size | Field |
 | --- | --- | --- | --- |
 | JoinRoomRequest | 0 | 4 bytes | RoomId |
-| JoinRoomRequest | 4 | 1 optional byte | Animation flag, exactly `1` when present |
+| JoinRoomRequest | 4 | 1 optional byte | Snapshot mode: `1` for bone poses, `2` for gait, `3` for gait with camera aim, or `4` for aimed gait plus remote shot events |
 | JoinRoomResponse | 0 | 4 bytes | Requested RoomId, including on failure |
 | JoinRoomResponse | 4 | 1 byte | RoomJoinResult |
 
@@ -74,7 +78,7 @@ before processing prevents admission or queues its cleanup; it does not require 
 After player creation, Stage 5 sends JoinAck as specified below.
 
 Room 1 request: `00 04 03 00 00 00 01`.
-Room 1 animation request: `00 05 03 00 00 00 01 01`.
+Room 1 bone pose request: `00 05 03 00 00 00 01 01`. Room 1 gait request: `00 05 03 00 00 00 01 02`. Room 1 gait and camera aim request: `00 05 03 00 00 00 01 03`. Room 1 with shot events: `00 05 03 00 00 00 01 04`.
 Room 1 success: `00 05 04 00 00 00 01 00`.
 Room 99 not found: `00 05 04 00 00 00 63 02`.
 Room 1 world unavailable: `00 05 04 00 00 00 01 04`.
@@ -88,9 +92,18 @@ failures return JoinRoomResponse. A positive nonexistent room ID is a valid requ
 Zero-length payloads are valid for Echo only. Requests and responses use TCP ordering;
 the client API allows one outstanding request at a time across both Echo and room admission.
 
+The server processes complete requests in arrival order, including mixed Echo and room requests.
+Admission failures keep the connection open and preserve existing membership. Responses contain
+the requested room ID even when admission fails. Sending an EchoResponse or JoinRoomResponse to
+the server is a direction error and closes the connection. Failed response writes also close the
+connection; ChannelInactive removes room membership before unregistering the session.
+Admission does not depend on acknowledgement delivery, so failure to deliver a successful response
+is resolved through that disconnect cleanup. All responses use the bounded output FIFO described below. This replaces the planned
+unbounded response path.
+
 ## Animated world snapshot
 
-An opted-in connection receives message 17 at the normal world snapshot cadence after JoinAck.
+A mode 1 connection receives message 17 at the normal world snapshot cadence after JoinAck.
 Every animation frame carries its complete position roster. Ordinary connections receive message 7.
 Both formats carry the same tick and foot positions. The server coalesces an animation frame as a single snapshot, including its positions and poses.
 
@@ -108,17 +121,39 @@ Rig ID 1 identifies the authored DeathWish rig and its joint order. A receiver c
 
 The world evaluates walk direction from committed planar travel after Bepu. Idle uses the standing pose and preserves the walk phase.
 Bone-linked diagnostic OBBs use the shared local box size and offset evaluated through the pose hierarchy.
-Unity uses the same rig, root, and pose timeline for display. Existing ray hits use the Bepu colliders.
+Existing ray hits use the Bepu colliders.
 To read the position and pose atomically, client callers use the `Positions` property of a single `LatestAnimatedSnapshot` value.
 
-The server processes complete requests in arrival order, including mixed Echo and room requests.
-Admission failures keep the connection open and preserve existing membership. Responses contain
-the requested room ID even when admission fails. Sending an EchoResponse or JoinRoomResponse to
-the server is a direction error and closes the connection. Failed response writes also close the
-connection; ChannelInactive removes room membership before unregistering the session.
-Admission does not depend on acknowledgement delivery, so failure to deliver a successful response
-is resolved through that disconnect cleanup. All responses use the bounded output FIFO described below. This replaces the planned
-unbounded response path.
+## Gait world snapshot
+
+Clients that use `JoinGaitRoomAsync` receive mode 2. Each type 18 snapshot starts with the complete type 7 position payload (14-byte header and 20 bytes per player), followed by the world simulation time in microseconds (positive signed int64). Each player then has one record in positional roster order.
+
+| Offset in player record | Bytes | Meaning |
+| --- | --- | --- |
+| 0 | 2 | Signed heading of travel in hundredths of a degree, from −18,000 to 18,000 |
+| 2 | 1 | Walking flag, 0 or 1 |
+| 3 | 4 | Unsigned cumulative walk cycles in 16.16 fixed point, 65,536 units per cycle |
+
+All multibyte fields are big-endian. The payload is `22 + 27 × player count` bytes. A complete snapshot replaces the previous roster. A new player can be rendered from the first received phase. Compute forward phase differences with unsigned 32-bit subtraction, interpolate on the same delayed timeline as position, and take the fractional cycle for clip time. The server advances the phase from actual horizontal travel while walking and holds it when stopped. Movement, collisions and ray hits use server physics independently of the displayed clip.
+
+## Camera aim and gait
+
+Unity joins with mode 4 using `JoinShootingRoomAsync`. A mode 3 observer using `JoinAimedGaitRoomAsync` receives the same gait snapshots. Unity sends message 19 at the normal movement input cadence, including at rest. A single sequence number orders the movement and camera sample together. The first 12 payload bytes have the type 6 layout. The final four bytes are signed, big-endian int16 angles in hundredths of a degree.
+
+| Payload offset | Range | Meaning |
+| --- | --- | --- |
+| 12 | −18,000 to +18,000 | World yaw around +Y. Zero faces +Z and positive yaw turns toward +X. |
+| 14 | −9,000 to +9,000 | Camera pitch around its local +X axis. Positive pitch looks down. |
+
+Type 20 carries the same position roster and server clock as type 18. Each 11-byte player record begins with the seven gait bytes described above, followed by camera yaw at offset 7 and camera pitch at offset 9. Payload length is `22 + 31 × player count` bytes. The direction of travel and the camera heading can differ. A new observer receives current aim with the first snapshot. A player that has never supplied camera aim is shown facing its travel heading with zero pitch.
+
+An admitted client can send type 19 in any snapshot mode. Type 6 and type 19 share the sequence check. A later ordinary movement packet updates movement and retains the last accepted look orientation, as does movement expiry. A camera turn at rest changes neither the player's position nor its walk phase. Shots still carry the camera origin offset and forward vector captured at click time in message 9. The server evaluates that ray against the room's physics bodies.
+
+### Shot feedback
+
+On each accepted camera ray (message 9), the server sends the shooter's hit or miss result privately in message 10. It sends one reliable message 21 to each other mode 4 player already admitted in the same room. Either a hit or a miss triggers this event. The source player ID occupies bytes 0–7 and the server simulation timestamp occupies bytes 8–15. The timestamp uses the same clock as message 20. Shot events use the ordered output queue separately from coalesced world snapshots. Joining or reconnecting starts a fresh subscription.
+
+The shooter captures the camera ray and visible muzzle before applying its local recoil. Observers use the event to animate the shooter's upper body and rifle. The server owns raycasts throughout.
 
 ## Lifecycle
 

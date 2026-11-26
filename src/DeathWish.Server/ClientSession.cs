@@ -48,7 +48,7 @@ public sealed class ClientSession
             {
                 return;
             }
-            RoomJoinResult result = rooms.Join(SessionId, request.RoomId, request.ReceivesAnimation);
+            RoomJoinResult result = rooms.Join(SessionId, request.RoomId, request.Mode);
             Send(PacketCodec.EncodeJoinRoomResponse(new JoinRoomResponse(request.RoomId, result)));
         }
     }

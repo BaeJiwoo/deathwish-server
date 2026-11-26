@@ -196,6 +196,16 @@ Review each unit before committing it and starting the next unit.
 - Retarget the replicated pose to the Bob FBX in the Unity client. Show the latest received tick position and the delayed position together and check their coordinates against the snapshot and the displayed marker.
 - Review status: awaiting user review on the animation branch.
 
+### 슈터 자세와 AR 소총 장착
+
+캐릭터는 에셋 저장소의 AR 모델을 양손에 들고 카메라가 바라보는 방향을 조준한다. 오른손 손바닥에 모델의 손잡이 원점을 놓고 왼팔의 팔꿈치와 손목을 모델의 지지점에 맞춘다. 정지 중 카메라를 돌리면 그 자리에서 방향을 바꾸고, 이동 중에도 좌우·상하 조준이 카메라를 따른다. 좌클릭하면 발사한 클라이언트에서 총구 소켓과 서버 응답 지점을 잇는 궤적을 그린다.
+
+**구현 · 리뷰 대기.** 서버는 물리 처리 후 실제 이동으로 걷기 상태·누적 주기·방향을 결정한다. Unity는 이동 입력과 카메라 yaw·pitch를 19번 패킷으로 함께 전송한다. 서버는 마지막 수락한 조준 방향을 20번 스냅숏의 플레이어별 보행 상태에 포함한다. 클라이언트 Animator가 ShooterPack 전진 걷기와 정지 클립을 표시한다. 기존 위치·관절각·보행 클라이언트는 각각 7·17·18번을 사용한다.
+
+- 사격은 ShooterPack의 `idle aiming.fbx` 위에 반동을 합성한다. 로컬 클릭 때 즉시 재생하고 서버가 처리한 발사는 4번 모드의 같은 방 관찰자에게 21번 이벤트로 전달한다. 적중·빗나감 판정과 발사자의 궤적은 클릭 때 기록한 레이와 총구를 사용한다.
+- 클립에는 골반·허벅지·정강이·발·발가락 동작을 담고, 전진 이동은 서버 발 좌표로 적용한다. 상체 조준과 총구 소켓은 같은 표시 시각을 따른다.
+- 검증 기준은 서버에서의 정지·벽 접촉·레이캐스트, 서로 다른 클라이언트의 혼합 접속, 주기 경계의 보간, 실제 Unity Animator의 클립 재생, 정지·옆걸음 중 로컬 카메라와 총구 방향의 일치, 원격 조준 복제와 늦게 입장한 플레이어의 첫 스냅숏이다.
+
 ## Stage 9 — Platform and load validation
 
 - [ ] Implementation and review complete.

@@ -1,5 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 
+using DeathWish.Protocol;
+
 namespace DeathWish.Server;
 
 internal sealed class WorldCommandQueue
@@ -23,7 +25,7 @@ internal sealed class WorldCommandQueue
     }
 
     internal bool TryEnqueueJoin(ClientSession session, [NotNullWhen(true)] out WorldAdmission? admission,
-        bool receivesAnimation = false)
+        SnapshotMode mode = SnapshotMode.Positions)
     {
         ArgumentNullException.ThrowIfNull(session);
         lock (_sync)
@@ -31,7 +33,7 @@ internal sealed class WorldCommandQueue
             admission = null;
             if (!_accepting || session.IsDisconnected || _admissions.Count >= _capacity) return false;
 
-            admission = new WorldAdmission(session, _timeProvider, receivesAnimation);
+            admission = new WorldAdmission(session, _timeProvider, mode);
             _admissions.Add(admission);
             _commands.Enqueue(new WorldCommand(WorldCommandType.Join, admission));
             return true;

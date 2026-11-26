@@ -68,12 +68,22 @@ for ($attempt = 0; $attempt -lt 2; $attempt++) {
     }
     if (!(Test-Path -LiteralPath "$fixture/Assets/DeathWishMovement/MovementTest.cs.disabled.meta")) { throw 'Old movement metadata not preserved.' }
     $manifest = [IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
+    if ($manifest.dependencies.'com.unity.modules.animation' -ne '1.0.0') { throw 'Animator module missing.' }
     if ($manifest.dependencies.'com.unity.ugui' -ne '2.0.0') { throw 'Supported Canvas package missing.' }
+    $artFiles = (Get-ChildItem (Join-Path $repo 'integrations/Unity/Resources/HeldRifleArt') -File -Recurse) | ForEach-Object {
+        $_.FullName.Substring((Join-Path $repo 'integrations/Unity').Length + 1)
+    }
     foreach ($relative in @('SyncTestClient.cs', 'SyncTestClient.cs.meta', 'Scenes/SyncTestScene.unity.meta',
         'RaycastFeedback.cs', 'RaycastFeedback.cs.meta', 'ShoulderCameraSettings.cs', 'ShoulderCameraSettings.cs.meta',
         'ServerAnimationView.cs', 'ServerAnimationView.cs.meta',
+        'ShooterAimView.cs', 'ShooterAimView.cs.meta',
+        'ClipGaitAnimator.cs', 'ClipGaitAnimator.cs.meta', 'Resources/ShooterWalk.anim', 'Resources/ShooterWalk.anim.meta',
+        'Resources/ShooterStand.anim', 'Resources/ShooterStand.anim.meta',
+        'Resources/ShooterAimPose.json', 'Resources/ShooterAimPose.json.meta',
+        'Resources/CharacterMatte.mat', 'Resources/CharacterMatte.mat.meta',
+        'Resources/HeldRifle.prefab', 'Resources/HeldRifle.prefab.meta', 'Resources/HeldRifleArt.meta',
         'Resources/ShotFeedback.shader', 'Resources/ShotFeedback.shader.meta',
-        'Resources/SyncTestWorld.shader', 'Resources/SyncTestWorld.shader.meta')) {
+        'Resources/SyncTestWorld.shader', 'Resources/SyncTestWorld.shader.meta') + $artFiles) {
         $sourceHash = (Get-FileHash (Join-Path $repo "integrations/Unity/$relative")).Hash
         $installedHash = (Get-FileHash "$fixture/Assets/DeathWishMovement/$relative").Hash
         if ($sourceHash -ne $installedHash) { throw "Installed content mismatch: $relative" }

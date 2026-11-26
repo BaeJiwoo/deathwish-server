@@ -13,6 +13,7 @@ internal sealed class MovementMailbox
     // A null ray represents one jump press.
     private readonly Queue<CameraRay?> _actions = new();
     private MoveInput _latest;
+    private AimAngles? _latestAim;
     private long _receivedTimestamp;
     private bool _hasInput;
     private bool _isClosed;
@@ -23,7 +24,7 @@ internal sealed class MovementMailbox
     }
 
     /// <summary>Thread-safe latest-input replacement. Rejected sequences do not refresh the receive timestamp.</summary>
-    internal bool TrySetInput(MoveInput input)
+    internal bool TrySetInput(MoveInput input, AimAngles? aim = null)
     {
         input.Validate();
         lock (_sync)
@@ -35,16 +36,21 @@ internal sealed class MovementMailbox
 
             _receivedTimestamp = _timeProvider.GetTimestamp();
             _latest = input;
+            _latestAim = aim ?? _latestAim;
             _hasInput = true;
             return true;
         }
     }
 
     /// <summary>The world loop reads a copied direction; expired input stays sequenced but produces zero movement.</summary>
-    internal Vector3 GetDirection()
+    internal Vector3 GetDirection() => GetDirection(out _);
+
+    /// <summary>The world loop takes one atomic movement and aim sample. Aim persists when movement expires.</summary>
+    internal Vector3 GetDirection(out AimAngles? aim)
     {
         lock (_sync)
         {
+            aim = _latestAim;
             if (_isClosed || !_hasInput)
             {
                 return Vector3.Zero;
@@ -93,6 +99,7 @@ internal sealed class MovementMailbox
             _actions.Clear();
             _hasInput = false;
             _latest = default;
+            _latestAim = null;
         }
     }
 }

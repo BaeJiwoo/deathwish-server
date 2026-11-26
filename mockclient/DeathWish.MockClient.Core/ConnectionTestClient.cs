@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 using System.Net.Sockets;
 using DeathWish.Protocol;
 using System.Threading;
@@ -23,10 +24,22 @@ public sealed class ConnectionTestClient : IDisposable
     private readonly TaskCompletionSource<JoinAck> _admission = new TaskCompletionSource<JoinAck>(TaskCreationOptions.RunContinuationsAsynchronously);
     private int? _acceptedRoom;
     private JoinRoomRequest? _requestedJoin;
-    private bool _receivesAnimation;
+    private SnapshotMode _snapshotMode;
     private bool _isSendingInput;
     private const int MAX_RAYCAST_RESULTS = 64;
-    private readonly System.Collections.Generic.Queue<string> _raycastResults = new System.Collections.Generic.Queue<string>();
+    private readonly Queue<string> _raycastResults = new Queue<string>();
+    private const int MAX_PENDING_SHOT_EVENTS = 4096;
+    private readonly Queue<ShotFired> _shots = new Queue<ShotFired>();
+
+    /// <summary>Reads the next remote shot once, in server order. Safe to drain from the Unity main thread.</summary>
+    public bool TryReadShotFired(out ShotFired shot)
+    {
+        lock (_sync)
+        {
+            return _shots.TryDequeue(out shot);
+        }
+    }
+
 
     public bool TryReadRaycastResult(out string? result)
     {
@@ -37,6 +50,7 @@ public sealed class ConnectionTestClient : IDisposable
     }
     private WorldSnapshot? _latestSnapshot;
     private AnimatedWorldSnapshot? _latestAnimatedSnapshot;
+    private GaitWorldSnapshot? _latestGaitSnapshot;
 
     /// <summary>Returns the latest immutable full snapshot, or null before the first snapshot. Safe to read from the UI thread.</summary>
     public WorldSnapshot? LatestSnapshot
@@ -58,6 +72,18 @@ public sealed class ConnectionTestClient : IDisposable
             lock (_sync)
             {
                 return _latestAnimatedSnapshot;
+            }
+        }
+    }
+
+    /// <summary>Returns the latest immutable gait and position snapshot. Safe to read from the UI thread.</summary>
+    public GaitWorldSnapshot? LatestGaitSnapshot
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _latestGaitSnapshot;
             }
         }
     }
@@ -143,6 +169,18 @@ public sealed class ConnectionTestClient : IDisposable
     public Task<JoinRoomResponse> JoinAnimatedRoomAsync(int roomId, CancellationToken cancellationToken) =>
         JoinAsync(new JoinRoomRequest(roomId, true), cancellationToken);
 
+    /// <summary>Requests compact Animator playback state. Cancellation closes the connection.</summary>
+    public Task<JoinRoomResponse> JoinGaitRoomAsync(int roomId, CancellationToken cancellationToken) =>
+        JoinAsync(new JoinRoomRequest(roomId, SnapshotMode.Gait), cancellationToken);
+
+    /// <summary>Requests synchronized locomotion and camera aim. Cancellation closes the connection.</summary>
+    public Task<JoinRoomResponse> JoinAimedGaitRoomAsync(int roomId, CancellationToken cancellationToken) =>
+        JoinAsync(new JoinRoomRequest(roomId, SnapshotMode.AimedGait), cancellationToken);
+
+    /// <summary>Requests aimed gait snapshots and reliable remote shot events. Cancellation closes the connection.</summary>
+    public Task<JoinRoomResponse> JoinShootingRoomAsync(int roomId, CancellationToken cancellationToken) =>
+        JoinAsync(new JoinRoomRequest(roomId, SnapshotMode.AimedGaitWithShots), cancellationToken);
+
     private Task<JoinRoomResponse> JoinAsync(JoinRoomRequest request, CancellationToken cancellationToken)
     {
         byte[] payload = PacketCodec.EncodeJoinRoomRequest(request);
@@ -152,6 +190,10 @@ public sealed class ConnectionTestClient : IDisposable
     /// <summary>Sends input after JoinAck without waiting for a response. Await all other sends/requests first; cancellation closes the connection.</summary>
     public Task SendMoveAsync(MoveInput input, CancellationToken cancellationToken) =>
         SendInputAsync(PacketCodec.EncodeMoveInput(input), cancellationToken);
+
+    /// <summary>Sends a sequenced movement and camera sample together. Await previous sends or requests first.</summary>
+    public Task SendAimedMoveAsync(MoveInput movement, AimAngles aim, CancellationToken cancellationToken) =>
+        SendInputAsync(PacketCodec.EncodeAimedMoveInput(movement, aim), cancellationToken);
 
     public Task SendJumpAsync(CancellationToken cancellationToken) =>
         SendInputAsync(ActionCodec.EncodeJump(), cancellationToken);
@@ -268,6 +310,21 @@ public sealed class ConnectionTestClient : IDisposable
                 {
                     lock (_sync)
                     {
+                        if (type == MessageType.ShotFired)
+                        {
+                            if (_snapshotMode != SnapshotMode.AimedGaitWithShots || _admission.Task.Status != TaskStatus.RanToCompletion)
+                            {
+                                throw new InvalidDataException("Unexpected shot event before admission or for this connection mode.");
+                            }
+
+                            ShotFired shot = ActionCodec.DecodeShotFired(payload);
+                            if (shot.PlayerId == _admission.Task.Result.PlayerId || _shots.Count >= MAX_PENDING_SHOT_EVENTS)
+                            {
+                                throw new InvalidDataException("Unexpected self shot or too many pending shot events.");
+                            }
+                            _shots.Enqueue(shot);
+                            return;
+                        }
                         if (type == MessageType.RaycastResult)
                         {
                             if (_admission.Task.Status != TaskStatus.RanToCompletion || _raycastResults.Count >= MAX_RAYCAST_RESULTS)
@@ -277,7 +334,8 @@ public sealed class ConnectionTestClient : IDisposable
                             _raycastResults.Enqueue(PacketCodec.DecodeEcho(payload));
                             return;
                         }
-                        if (type == MessageType.WorldSnapshot || type == MessageType.AnimatedWorldSnapshot)
+                        if (type == MessageType.WorldSnapshot || type == MessageType.AnimatedWorldSnapshot ||
+                            type == MessageType.GaitWorldSnapshot || type == MessageType.AimedGaitWorldSnapshot)
                         {
                             ReceiveSnapshot(type, payload);
                             return;
@@ -305,7 +363,7 @@ public sealed class ConnectionTestClient : IDisposable
                                 if (!_acceptedRoom.HasValue)
                                 {
                                     _acceptedRoom = response.RoomId;
-                                    _receivesAnimation = join.ReceivesAnimation;
+                                    _snapshotMode = join.Mode;
                                 }
                             }
                         }
@@ -324,19 +382,32 @@ public sealed class ConnectionTestClient : IDisposable
     // Called only by the receive loop under the connection lock.
     private void ReceiveSnapshot(MessageType type, byte[] payload)
     {
-        bool includesAnimation = type == MessageType.AnimatedWorldSnapshot;
-        if (includesAnimation != _receivesAnimation || _admission.Task.Status != TaskStatus.RanToCompletion)
+        MessageType expected = _snapshotMode switch
+        {
+            SnapshotMode.Gait => MessageType.GaitWorldSnapshot,
+            SnapshotMode.AimedGait or SnapshotMode.AimedGaitWithShots => MessageType.AimedGaitWorldSnapshot,
+            SnapshotMode.BonePoses => MessageType.AnimatedWorldSnapshot,
+            _ => MessageType.WorldSnapshot
+        };
+        if (type != expected || _admission.Task.Status != TaskStatus.RanToCompletion)
         {
             throw new InvalidDataException("Unexpected world snapshot format or admission order.");
         }
 
-        AnimatedWorldSnapshot? animation = includesAnimation ? AnimatedSnapshotCodec.Decode(payload) : null;
-        WorldSnapshot snapshot = animation?.Positions ?? SnapshotCodec.Decode(payload);
+        AnimatedWorldSnapshot? animation = type == MessageType.AnimatedWorldSnapshot ? AnimatedSnapshotCodec.Decode(payload) : null;
+        GaitWorldSnapshot? gait = type switch
+        {
+            MessageType.GaitWorldSnapshot => GaitSnapshotCodec.Decode(payload),
+            MessageType.AimedGaitWorldSnapshot => GaitSnapshotCodec.Decode(payload, true),
+            _ => null
+        };
+        WorldSnapshot snapshot = gait?.Positions ?? animation?.Positions ?? SnapshotCodec.Decode(payload);
         JoinAck admission = _admission.Task.Result;
         if (snapshot.RoomId != _acceptedRoom || snapshot.ServerTick < admission.ServerTick ||
             (_latestSnapshot != null && snapshot.ServerTick <= _latestSnapshot.ServerTick) ||
             (animation != null && _latestAnimatedSnapshot != null &&
-                animation.ServerTimeMicroseconds <= _latestAnimatedSnapshot.ServerTimeMicroseconds))
+                animation.ServerTimeMicroseconds <= _latestAnimatedSnapshot.ServerTimeMicroseconds) ||
+            (gait != null && _latestGaitSnapshot != null && gait.ServerTimeMicroseconds <= _latestGaitSnapshot.ServerTimeMicroseconds))
         {
             throw new InvalidDataException("Unexpected world snapshot clock or room.");
         }
@@ -347,6 +418,7 @@ public sealed class ConnectionTestClient : IDisposable
             {
                 _latestSnapshot = snapshot;
                 _latestAnimatedSnapshot = animation;
+                _latestGaitSnapshot = gait;
                 return;
             }
         }
@@ -360,6 +432,7 @@ public sealed class ConnectionTestClient : IDisposable
             if (_closed) return;
             _closed = true;
             _disconnectError = error;
+            _shots.Clear();
             _pendingResponse?.TrySetException(error ?? new EndOfStreamException("Connection closed."));
             _admission.TrySetException(error ?? new EndOfStreamException("Connection closed before admission."));
             _ = _admission.Task.Exception;
