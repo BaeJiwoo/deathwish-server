@@ -248,6 +248,8 @@ powershell -ExecutionPolicy Bypass -File .\integrations\Unity\Install.ps1 -Unity
 
 `python3 tools/animation/bake_walk.py --check`로 60 Hz 걷기 테이블의 재현성을 확인할 수 있습니다. 전체 ConnectionTests는 프레임 경계, 기존 접속과 애니메이션 접속 혼용, 지연 입력 만료, 세계 좌표 히트박스를 검사합니다.
 
-Unity 배치 검증은 별도 클라이언트 복사본의 `Assets/Editor`에 `ServerAnimationSceneCheck.cs`와 `ServerAnimationPoseReferenceCheck.cs`를 넣고 `-executeMethod DeathWish.Client.Editor.ServerAnimationSceneCheck.Run`으로 실행합니다. `DW_ANIMATION_TEST_PORT`에 방 1을 사용할 서버의 로컬 TCP 포트를 지정하면 실제 접속과 원격 관절 이동도 검증합니다.
+Unity 배치 검증은 별도 클라이언트 복사본의 `Assets/Editor`에 `ServerAnimationSceneCheck.cs`와 `ServerAnimationPoseReferenceCheck.cs`를 넣고 `-executeMethod DeathWish.Client.Editor.ServerAnimationSceneCheck.Run`으로 실행합니다. `DW_ANIMATION_TEST_PORT`에 방 1을 사용할 서버의 로컬 TCP 포트를 지정하면 실제 접속과 원격 관절 이동도 검증합니다. Bob FBX가 포함된 클라이언트에서 `DW_ANIMATION_REQUIRE_BOB=1`을 함께 지정하면 Bob의 스킨 본이 서버 포즈대로 움직이는지도 검증합니다.
+
+**Show Position Gizmos**가 켜져 있으면 자홍색 원은 최신 수신 서버 틱, 청록색 마름모는 클라이언트가 보간해 화면에 표시한 위치를 뜻합니다. 서버 포즈에 맞춰 움직이는 Bob과 두 표식을 같은 장면에서 볼 수 있습니다.
 
 관련 문서 [프로토콜](Protocol.md), [구현 계획](ImplementationPlan.md), [Unity 연동 상세](../integrations/Unity/README.md), [개발 기록](devlog/README.md).

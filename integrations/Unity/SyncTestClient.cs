@@ -18,7 +18,7 @@ namespace DeathWish.Client
         private const float INPUT_INTERVAL_SECONDS = 1f / 30f;
         private const float LOOK_SENSITIVITY = 2f;
         private const float DEGREES_PER_TURN = 360f;
-        private const float GIZMO_RADIUS_METERS = 0.35f;
+        private const float POSITION_LABEL_HEIGHT_METERS = 0.70f;
         private const float DEFAULT_PITCH_DEGREES = 8f;
         private const float MIN_PITCH_DEGREES = -65f;
         private const float MAX_PITCH_DEGREES = 75f;
@@ -50,6 +50,8 @@ namespace DeathWish.Client
         [SerializeField] private Text _aimResult = null;
         [SerializeField] private ShoulderCameraSettings _shoulderCamera = new ShoulderCameraSettings();
         [SerializeField] private bool _showRaycastGizmos = true;
+        [SerializeField, Tooltip("Show the latest server position (magenta circle) and the interpolated client position (cyan diamond).")]
+        private bool _showPositionGizmos = true;
         [SerializeField, Tooltip("Subscribe to authoritative bone poses. Disable for older servers.")]
         private bool _useServerAnimation = true;
 
@@ -58,6 +60,7 @@ namespace DeathWish.Client
         private double _blendStartSeconds;
         private bool _hasSnapshot;
         private readonly Dictionary<long, Transform> _markers = new Dictionary<long, Transform>();
+        private readonly Dictionary<long, PositionGizmos> _positionGizmos = new Dictionary<long, PositionGizmos>();
         private readonly Dictionary<long, ServerCharacterView> _serverCharacters = new Dictionary<long, ServerCharacterView>();
         private readonly ServerAnimationTimeline _animationTimeline = new ServerAnimationTimeline();
         private readonly List<long> _departedPlayers = new List<long>();
@@ -74,6 +77,7 @@ namespace DeathWish.Client
         private Material _cautionMaterial;
         private Material _localMaterial;
         private Material _remoteMaterial;
+        private Material _positionGizmoMaterial;
         private ConnectionTestClient _client;
         private CancellationTokenSource _cancellation;
         private string _status = "PhysicsLab preview | Disconnected";
@@ -115,6 +119,7 @@ namespace DeathWish.Client
             if (feedbackShader != null && feedbackShader.isSupported)
             {
                 _feedback = new RaycastFeedback(transform, feedbackShader);
+                _positionGizmoMaterial = new Material(feedbackShader);
             }
             _sceneCamera = Camera.main;
             Shader shader = Resources.Load<Shader>("SyncTestWorld");
@@ -549,6 +554,7 @@ namespace DeathWish.Client
             foreach (long playerId in _departedPlayers)
             {
                 _markers.Remove(playerId);
+                _positionGizmos.Remove(playerId);
                 _blendStarts.Remove(playerId);
                 _serverCharacters.Remove(playerId);
             }
@@ -582,6 +588,8 @@ namespace DeathWish.Client
                 {
                     marker.position = DisplayPosition(player.Key, player.Value, fraction);
                 }
+
+                UpdatePositionGizmos(player.Key, marker, player.Value);
             }
 
             if (_playerId == 0)
@@ -631,6 +639,25 @@ namespace DeathWish.Client
             {
                 marker.gameObject.SetActive(true);
             }
+        }
+
+        private void UpdatePositionGizmos(long id, Transform marker, Vector3 serverPosition)
+        {
+            _positionGizmos.TryGetValue(id, out PositionGizmos gizmos);
+            if (!_showPositionGizmos || _positionGizmoMaterial == null || !marker.gameObject.activeSelf)
+            {
+                gizmos?.SetVisible(false);
+                return;
+            }
+
+            if (gizmos == null)
+            {
+                gizmos = new PositionGizmos(marker, _positionGizmoMaterial);
+                _positionGizmos.Add(id, gizmos);
+            }
+
+            gizmos.Update(serverPosition, marker.position);
+            gizmos.SetVisible(true);
         }
 
         public void SwapShoulder()
@@ -743,23 +770,24 @@ namespace DeathWish.Client
                 return;
             }
 
-            Color previousColor = Gizmos.color;
             if (_showRaycastGizmos)
             {
+                Color previousColor = Gizmos.color;
                 _feedback?.DrawGizmos(Time.unscaledTime);
+                Gizmos.color = previousColor;
             }
+
+            if (!_showPositionGizmos)
+            {
+                return;
+            }
+
             foreach (var player in _positions)
             {
-                bool isLocalPlayer = player.Key == _playerId;
-                Gizmos.color = isLocalPlayer ? LocalAccent : RemoteAccent;
-                Gizmos.DrawWireSphere(player.Value, GIZMO_RADIUS_METERS);
-                Gizmos.DrawLine(player.Value - Vector3.right * GIZMO_RADIUS_METERS, player.Value + Vector3.right * GIZMO_RADIUS_METERS);
-                Gizmos.DrawLine(player.Value - Vector3.forward * GIZMO_RADIUS_METERS, player.Value + Vector3.forward * GIZMO_RADIUS_METERS);
-                string identity = isLocalPlayer ? "ME " : "PLAYER ";
-                UnityEditor.Handles.Label(player.Value + Vector3.up * (GIZMO_RADIUS_METERS * 2),
-                    identity + player.Key + "\n" + FormatPosition(player.Value));
+                string identity = player.Key == _playerId ? "ME " : "PLAYER ";
+                Vector3 labelPosition = player.Value + Vector3.up * POSITION_LABEL_HEIGHT_METERS;
+                UnityEditor.Handles.Label(labelPosition, identity + player.Key + "\n" + FormatPosition(player.Value));
             }
-            Gizmos.color = previousColor;
 #endif
         }
 
@@ -803,6 +831,7 @@ namespace DeathWish.Client
             Destroy(_cautionMaterial);
             Destroy(_localMaterial);
             Destroy(_remoteMaterial);
+            Destroy(_positionGizmoMaterial);
         }
 
         /// <summary>Cancels the active connection and clears snapshot markers on Unity's main thread.</summary>
@@ -837,6 +866,7 @@ namespace DeathWish.Client
                 RemoveMarker(marker);
             }
             _markers.Clear();
+            _positionGizmos.Clear();
             _serverCharacters.Clear();
             cancellation?.Cancel();
             client?.Dispose();
@@ -855,6 +885,84 @@ namespace DeathWish.Client
         private static float Axis(KeyCode positive, KeyCode negative)
         {
             return (Input.GetKey(positive) ? 1 : 0) - (Input.GetKey(negative) ? 1 : 0);
+        }
+
+        private sealed class PositionGizmos
+        {
+            private const int CIRCLE_SEGMENTS = 24;
+            private const int DIAMOND_SEGMENTS = 4;
+            private const float SERVER_RADIUS_METERS = 0.50f;
+            private const float CLIENT_RADIUS_METERS = 0.36f;
+            private const float FLOOR_CLEARANCE_METERS = 0.04f;
+            private const float OUTLINE_WIDTH_METERS = 0.028f;
+            private const float OFFSET_WIDTH_METERS = 0.022f;
+            private static readonly Color ServerColor = new Color32(211, 15, 129, 255);
+            private static readonly Color ClientColor = new Color32(0, 148, 188, 255);
+            private static readonly Vector3 FloorClearance = Vector3.up * FLOOR_CLEARANCE_METERS;
+
+            private readonly Transform _root;
+            private readonly LineRenderer _server;
+            private readonly LineRenderer _client;
+            private readonly LineRenderer _offset;
+
+            internal PositionGizmos(Transform marker, Material material)
+            {
+                _root = new GameObject("Position Gizmos").transform;
+                _root.SetParent(marker, false);
+                _server = CreateOutline("Server position (latest tick)", material, ServerColor,
+                    SERVER_RADIUS_METERS, CIRCLE_SEGMENTS);
+                _client = CreateOutline("Client position (interpolated)", material, ClientColor,
+                    CLIENT_RADIUS_METERS, DIAMOND_SEGMENTS);
+                _offset = CreateLine("Position offset", material, ServerColor, OFFSET_WIDTH_METERS, 2);
+                _offset.endColor = ClientColor;
+                _offset.useWorldSpace = true;
+            }
+
+            internal void Update(Vector3 serverPosition, Vector3 clientPosition)
+            {
+                _server.transform.SetPositionAndRotation(serverPosition, Quaternion.identity);
+                _client.transform.SetPositionAndRotation(clientPosition, Quaternion.identity);
+                _offset.enabled = serverPosition != clientPosition;
+                _offset.SetPosition(0, serverPosition + FloorClearance);
+                _offset.SetPosition(1, clientPosition + FloorClearance);
+            }
+
+            internal void SetVisible(bool isVisible)
+            {
+                if (_root.gameObject.activeSelf != isVisible)
+                {
+                    _root.gameObject.SetActive(isVisible);
+                }
+            }
+
+            private LineRenderer CreateOutline(string name, Material material, Color color, float radiusMeters, int segments)
+            {
+                LineRenderer line = CreateLine(name, material, color, OUTLINE_WIDTH_METERS, segments);
+                line.useWorldSpace = false;
+                line.loop = true;
+                for (int i = 0; i < segments; i++)
+                {
+                    float angle = 2f * Mathf.PI * i / segments;
+                    line.SetPosition(i, FloorClearance + radiusMeters * new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle)));
+                }
+
+                return line;
+            }
+
+            private LineRenderer CreateLine(string name, Material material, Color color, float widthMeters, int points)
+            {
+                var container = new GameObject(name);
+                container.transform.SetParent(_root, false);
+                var line = container.AddComponent<LineRenderer>();
+                line.sharedMaterial = material;
+                line.startColor = color;
+                line.endColor = color;
+                line.widthMultiplier = widthMeters;
+                line.positionCount = points;
+                line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                line.receiveShadows = false;
+                return line;
+            }
         }
     }
 }

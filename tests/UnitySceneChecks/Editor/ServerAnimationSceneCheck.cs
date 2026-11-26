@@ -19,13 +19,16 @@ namespace DeathWish.Client.Editor
     {
         private const string RUNNING = "DeathWish.ServerAnimationSceneCheck.Running";
         private const string PORT_ENV = "DW_ANIMATION_TEST_PORT";
+        private const string REQUIRE_BOB_ENV = "DW_ANIMATION_REQUIRE_BOB";
         private const string SCENE_PATH = "Assets/DeathWishMovement/Scenes/SyncTestScene.unity";
+        private const string POSITION_GIZMOS_NAME = "Position Gizmos";
         private const long LOCAL_ID = 7;
         private const long REMOTE_ID = 8;
         private const int ROOM_ID = 1;
         private const int TORSO_INDEX = 1;
         private const float POSITION_TOLERANCE_METERS = 0.002f;
         private const float ANGLE_TOLERANCE_DEGREES = 0.1f;
+        private const float MOVING_THIGH_ANGLE_DEGREES = 2f;
         private const double NETWORK_TIMEOUT_SECONDS = 15;
         private const double INPUT_INTERVAL_SECONDS = 1.0 / 30;
         private const BindingFlags PRIVATE_INSTANCE = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -37,6 +40,9 @@ namespace DeathWish.Client.Editor
         private static Task _lastSend;
         private static uint _nextSequence;
         private static double _nextInputSeconds;
+        private static bool _requiresBob;
+        private static Transform _bobThigh;
+        private static Quaternion _bobStandingThighRotation;
 
         static ServerAnimationSceneCheck()
         {
@@ -68,8 +74,10 @@ namespace DeathWish.Client.Editor
                     _client.Disconnect();
 
                     string configuredPort = Environment.GetEnvironmentVariable(PORT_ENV);
+                    _requiresBob = Environment.GetEnvironmentVariable(REQUIRE_BOB_ENV) == "1";
                     if (string.IsNullOrEmpty(configuredPort))
                     {
+                        Require(!_requiresBob, REQUIRE_BOB_ENV + " requires " + PORT_ENV + " for the live Bob check.");
                         Finish(0);
                         return;
                     }
@@ -96,6 +104,7 @@ namespace DeathWish.Client.Editor
             SetField(client, "_playerId", LOCAL_ID);
             SetField(client, "_usesServerAnimation", true);
             SetField(client, "_yawDegrees", 35f);
+            SetField(client, "_showPositionGizmos", true);
             var localStart = new Vector3(2f, 0f, -1f);
             var localEnd = new Vector3(4f, 0f, 1f);
             var remoteStart = new Vector3(-2f, 0f, 0f);
@@ -114,8 +123,10 @@ namespace DeathWish.Client.Editor
             Transform localRig = local.Find("ServerRig");
             Transform remote = Marker(client, REMOTE_ID);
             Transform torso = localRig.Find("Root/Torso");
-            Require(Vector3.Distance(local.position, Vector3.Lerp(localStart, localEnd, 0.5f)) < POSITION_TOLERANCE_METERS &&
-                Vector3.Distance(remote.position, Vector3.Lerp(remoteStart, remoteEnd, 0.5f)) < POSITION_TOLERANCE_METERS,
+            Vector3 localMidpoint = Vector3.Lerp(localStart, localEnd, 0.5f);
+            Vector3 remoteMidpoint = Vector3.Lerp(remoteStart, remoteEnd, 0.5f);
+            Require(Vector3.Distance(local.position, localMidpoint) < POSITION_TOLERANCE_METERS &&
+                Vector3.Distance(remote.position, remoteMidpoint) < POSITION_TOLERANCE_METERS,
                 "The local and remote marker must use the delayed snapshot bracket.");
             Require(Quaternion.Angle(torso.localRotation, Quaternion.Euler(30f, 0f, 0f)) < ANGLE_TOLERANCE_DEGREES &&
                 Quaternion.Angle(localRig.rotation, Quaternion.Euler(0f, 180f, 0f)) < ANGLE_TOLERANCE_DEGREES,
@@ -123,15 +134,34 @@ namespace DeathWish.Client.Editor
             Require(Quaternion.Angle(local.rotation, Quaternion.Euler(0f, 35f, 0f)) < ANGLE_TOLERANCE_DEGREES,
                 "The visual yaw must leave the local motion and aim basis alone.");
 
+            Transform localGizmos = local.Find(POSITION_GIZMOS_NAME);
+            Transform remoteGizmos = remote.Find(POSITION_GIZMOS_NAME);
+            VerifyPositionGizmos(localGizmos, localEnd, localMidpoint);
+            VerifyPositionGizmos(remoteGizmos, remoteEnd, remoteMidpoint);
+
+            SetField(client, "_showPositionGizmos", false);
+            Render(client, 10.15);
+            Require(!localGizmos.gameObject.activeInHierarchy && !remoteGizmos.gameObject.activeInHierarchy,
+                "Disabling the position gizmos must hide the local and remote overlays.");
+            SetField(client, "_showPositionGizmos", true);
+            Render(client, 10.15);
+            VerifyPositionGizmos(localGizmos, localEnd, localMidpoint);
+            VerifyPositionGizmos(remoteGizmos, remoteEnd, remoteMidpoint);
+
             Render(client, 10.9);
             ServerAnimationPoseReferenceCheck.Verify(local, localEnd, -17_500, endAngles);
             ServerAnimationPoseReferenceCheck.Verify(remote, remoteEnd, -17_500, endAngles);
+            VerifyPositionGizmos(localGizmos, localEnd, localEnd);
+            VerifyPositionGizmos(remoteGizmos, remoteEnd, remoteEnd);
             Debug.Log("PASS offline animation: buffered root/pose interpolation, all rendered bones and boxes, and no extrapolation");
 
             var fresh = new Vector3(7f, 0f, -3f);
             Apply(client, 3, 2_250_000, 11.25, fresh, null, 0, startAngles);
             Render(client, 11.25);
             Require(!remote.gameObject.activeSelf, "A departing player's marker must be hidden immediately.");
+            Require(!remoteGizmos.gameObject.activeInHierarchy,
+                "A departing player's server and client position gizmos must disappear with their marker.");
+            Debug.Log("PASS offline position gizmos: latest tick, delayed interpolation, toggle, convergence, and departure");
             ServerAnimationPoseReferenceCheck.Verify(local, fresh, 0, startAngles);
 
             // A stalled receive clock can have a long gap while the server advances only one fixed step.
@@ -153,6 +183,22 @@ namespace DeathWish.Client.Editor
             Require(legacyMarker.Find("Body") != null && legacyMarker.Find("ServerRig") == null,
                 "A standard room snapshot must keep the legacy body view.");
             Debug.Log("PASS offline animation: clock and receive gap reset, departure, rig mismatch, and legacy view after disconnect");
+        }
+
+        private static void VerifyPositionGizmos(Transform gizmos, Vector3 expectedServer, Vector3 expectedClient)
+        {
+            Require(gizmos != null && gizmos.gameObject.activeInHierarchy, "The position gizmos must be visible.");
+            LineRenderer server = gizmos.Find("Server position (latest tick)")?.GetComponent<LineRenderer>();
+            LineRenderer client = gizmos.Find("Client position (interpolated)")?.GetComponent<LineRenderer>();
+            LineRenderer offset = gizmos.Find("Position offset")?.GetComponent<LineRenderer>();
+            Require(server != null && server.enabled && client != null && client.enabled && offset != null,
+                "The overlay must draw both positions and provide an offset line.");
+            Require(server.startColor != client.startColor, "The two position outlines must use different colors.");
+            Require(Vector3.Distance(server.transform.position, expectedServer) < POSITION_TOLERANCE_METERS &&
+                Vector3.Distance(client.transform.position, expectedClient) < POSITION_TOLERANCE_METERS,
+                "The server outline must follow the latest tick and the client outline must follow the delayed sample.");
+            Require(offset.enabled == (expectedServer != expectedClient),
+                "The offset line must be visible only when the server and client positions differ.");
         }
 
         private static void Apply(SyncTestClient client, long tick, long timeMicroseconds, double receivedAtSeconds,
@@ -216,6 +262,20 @@ namespace DeathWish.Client.Editor
             }
 
             JoinAck peer = _peerAdmission.GetAwaiter().GetResult();
+            Transform remoteMarker = _client.transform.Find($"Player {peer.PlayerId}");
+            Transform remoteRig = remoteMarker == null ? null : remoteMarker.Find("ServerRig");
+            Transform leftThigh = remoteRig == null ? null : remoteRig.Find("Root/LeftThigh");
+            if (leftThigh == null || !remoteMarker.gameObject.activeInHierarchy)
+            {
+                return false;
+            }
+
+            if (_requiresBob && _bobThigh == null)
+            {
+                _bobThigh = FindBobThigh(remoteRig);
+                _bobStandingThighRotation = _bobThigh.localRotation;
+            }
+
             double nowSeconds = EditorApplication.timeSinceStartup;
             if (nowSeconds >= _nextInputSeconds && (_lastSend == null || _lastSend.IsCompleted))
             {
@@ -225,25 +285,49 @@ namespace DeathWish.Client.Editor
             }
 
             AnimatedWorldSnapshot snapshot = realClient.LatestAnimatedSnapshot;
-            Transform remoteMarker = _client.transform.Find($"Player {peer.PlayerId}");
-            Transform remoteRig = remoteMarker == null ? null : remoteMarker.Find("ServerRig");
-            Transform leftThigh = remoteRig == null ? null : remoteRig.Find("Root/LeftThigh");
-            if (leftThigh == null || !remoteMarker.gameObject.activeInHierarchy)
+            AnimatedPlayer pose = snapshot.Players.FirstOrDefault(player => player.PlayerId == peer.PlayerId);
+            bool serverSendsWalking = pose.BonePitchCentidegrees != null &&
+                pose.BonePitchCentidegrees.Any(angle => Math.Abs(angle) > 250);
+            float thighRotationDegrees = Quaternion.Angle(leftThigh.localRotation, Quaternion.identity);
+            if (!serverSendsWalking || remoteMarker.position.x < peer.X + 0.2f ||
+                thighRotationDegrees < MOVING_THIGH_ANGLE_DEGREES)
             {
                 return false;
             }
 
-            AnimatedPlayer pose = snapshot.Players.FirstOrDefault(player => player.PlayerId == peer.PlayerId);
-            bool serverSendsWalking = pose.BonePitchCentidegrees != null &&
-                pose.BonePitchCentidegrees.Any(angle => Math.Abs(angle) > 250);
-            if (!serverSendsWalking || remoteMarker.position.x < peer.X + 0.2f ||
-                Quaternion.Angle(leftThigh.localRotation, Quaternion.identity) < 2f)
+            if (_requiresBob)
             {
-                return false;
+                float bobRotationDegrees = Quaternion.Angle(_bobStandingThighRotation, _bobThigh.localRotation);
+                Require(Mathf.Abs(bobRotationDegrees - thighRotationDegrees) < ANGLE_TOLERANCE_DEGREES,
+                    $"Bob's skinned thigh moved {bobRotationDegrees:F2}°, expected {thighRotationDegrees:F2}° from the server pose.");
+                Debug.Log("PASS live Bob animation: the visible skinned thigh follows the replicated pose");
             }
 
             Debug.Log("PASS live TCP animation: remote pose from the server drives the moving Unity rig");
             return true;
+        }
+
+        private static Transform FindBobThigh(Transform rig)
+        {
+            Transform bob = rig.Find("Root/Bob");
+            Require(bob != null && bob.gameObject.activeInHierarchy, "The installed Bob model must be visible under ServerRig/Root.");
+            foreach (SkinnedMeshRenderer renderer in bob.GetComponentsInChildren<SkinnedMeshRenderer>())
+            {
+                if (!renderer.enabled || renderer.forceRenderingOff || renderer.sharedMesh == null ||
+                    renderer.sharedMesh.vertexCount == 0)
+                {
+                    continue;
+                }
+
+                Transform thigh = Array.Find(renderer.bones,
+                    bone => bone != null && bone.name.EndsWith("LeftUpLeg", StringComparison.Ordinal));
+                if (thigh != null)
+                {
+                    return thigh;
+                }
+            }
+
+            throw new InvalidOperationException("Bob must have a visible skinned mesh bound to a left thigh bone.");
         }
 
         private static void Finish(int result)

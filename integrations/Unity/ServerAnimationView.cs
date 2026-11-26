@@ -156,6 +156,7 @@ namespace DeathWish.Client
         private const float CENTIDEGREES_PER_DEGREE = 100f;
         private readonly Transform _root;
         private readonly Transform[] _bones;
+        private readonly BobCharacterSkin _bob;
 
         internal ServerCharacterView(Transform marker, Mesh boxMesh, Material material)
         {
@@ -182,6 +183,15 @@ namespace DeathWish.Client
                 box.AddComponent<MeshFilter>().sharedMesh = boxMesh;
                 box.AddComponent<MeshRenderer>().sharedMaterial = material;
             }
+
+            _bob = BobCharacterSkin.TryCreate(_bones[0], material);
+            if (_bob != null)
+            {
+                foreach (MeshRenderer renderer in _root.GetComponentsInChildren<MeshRenderer>())
+                {
+                    renderer.enabled = false;
+                }
+            }
         }
 
         internal void Apply(AnimatedPlayer previous, AnimatedPlayer next, float fraction)
@@ -197,11 +207,101 @@ namespace DeathWish.Client
                 _bones[index].localRotation = Quaternion.Slerp(
                     Quaternion.Euler(previousPitch, 0f, 0f), Quaternion.Euler(nextPitch, 0f, 0f), fraction);
             }
+            _bob?.Apply(_bones);
         }
 
         private static Vector3 ToUnityVector(System.Numerics.Vector3 value)
         {
             return new Vector3(value.X, value.Y, value.Z);
+        }
+    }
+
+    internal sealed class BobCharacterSkin
+    {
+        private const string MODEL_RESOURCE = "bob_rigged";
+        private const float PELVIS_HEIGHT_METERS = 0.9514f;
+
+        // The import preserves the Mixamo hierarchy and binds Bob to the shared rig's wire order.
+        private static readonly string[] BoneNames =
+        {
+            null, "Spine", "Head", "LeftArm", "LeftForeArm", "RightArm", "RightForeArm",
+            "LeftUpLeg", "LeftLeg", "RightUpLeg", "RightLeg"
+        };
+
+        private readonly Transform[] _bones;
+        private readonly Quaternion[] _bindRotations;
+        private readonly Quaternion[] _rotationBases;
+
+        private BobCharacterSkin(Transform[] bones, Quaternion rigRotation)
+        {
+            _bones = bones;
+            _bindRotations = new Quaternion[bones.Length];
+            _rotationBases = new Quaternion[bones.Length];
+            for (int index = 1; index < bones.Length; index++)
+            {
+                Transform bone = bones[index];
+                _bindRotations[index] = bone.localRotation;
+                _rotationBases[index] = Quaternion.Inverse(bone.rotation) * rigRotation;
+            }
+        }
+
+        internal static BobCharacterSkin TryCreate(Transform feet, Material material)
+        {
+            var prefab = Resources.Load<GameObject>(MODEL_RESOURCE);
+            if (prefab == null)
+            {
+                return null;
+            }
+
+            GameObject model = UnityEngine.Object.Instantiate(prefab, feet, false);
+            var skin = model.GetComponentInChildren<SkinnedMeshRenderer>();
+            if (skin == null || !TryBind(skin.bones, out Transform[] bones))
+            {
+                model.SetActive(false);
+                UnityEngine.Object.Destroy(model);
+                return null;
+            }
+
+            // Bob's FBX origin is at the pelvis. Server markers are at the feet.
+            model.name = "Bob";
+            model.transform.localPosition = Vector3.up * PELVIS_HEIGHT_METERS;
+            skin.sharedMaterial = material;
+            return new BobCharacterSkin(bones, feet.rotation);
+        }
+
+        internal void Apply(Transform[] serverBones)
+        {
+            for (int index = 1; index < _bones.Length; index++)
+            {
+                // Express the server's pitch in the imported bone's bind axes.
+                Quaternion basis = _rotationBases[index];
+                Quaternion rotation = basis * serverBones[index].localRotation * Quaternion.Inverse(basis);
+                _bones[index].localRotation = _bindRotations[index] * rotation;
+            }
+        }
+
+        private static bool TryBind(Transform[] skinBones, out Transform[] bones)
+        {
+            var bonesByName = new Dictionary<string, Transform>(StringComparer.Ordinal);
+            foreach (Transform bone in skinBones)
+            {
+                if (bone != null)
+                {
+                    string name = bone.name;
+                    bonesByName[name.Substring(name.LastIndexOf(':') + 1)] = bone;
+                }
+            }
+
+            bones = new Transform[BoneNames.Length];
+            for (int index = 1; index < BoneNames.Length; index++)
+            {
+                if (!bonesByName.TryGetValue(BoneNames[index], out bones[index]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 }
